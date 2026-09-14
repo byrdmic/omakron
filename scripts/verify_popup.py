@@ -246,10 +246,6 @@ def verify_editor_flow(ipc, key, capture, *, env, scratch, out, processes):
         json.dumps(
             {
                 "claude_executable": str(REPO / "tests/fake_claude.py"),
-                "snapshot_source": {
-                    "kind": "fixture",
-                    "dir": str(REPO / "tests/fixtures/snapshots"),
-                },
             }
         )
     )

@@ -1,24 +1,23 @@
-"""The run executor: claim, snapshot, launch, judge, store, in that order.
+"""The run executor: claim, launch, record, store, in that order.
 
 One worker thread per service. It claims the oldest queued run in a
-transaction, fetches the issue snapshot and records it before launch, runs the
-verified Claude profile under :func:`omakron.runner.supervise`, classifies the
-result from supervisor facts plus the report contract, stores the report
-durably, and only then writes the terminal status. Any step that cannot store
-its output turns the run into a failure, whatever the model said.
+transaction, runs Claude Code with the routine's prompt on stdin and the
+routine's tools and permission mode under :func:`omakron.runner.supervise`,
+records how the process ended, stores the model's result durably, and only
+then writes the terminal status. A step that cannot store its output turns the
+run into a failure, because a success the service cannot show is not one.
 """
 
 from __future__ import annotations
 
-import json
 import logging
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any
 
-from omakron import history, triage
+from omakron import history
 from omakron.runner import (
     STOP_CANCEL,
     STOP_SHUTDOWN,
@@ -33,16 +32,9 @@ from omakron.runner import (
     supervise,
     write_durably,
 )
-from omakron.snapshot import SnapshotError, snapshot_digest
-from omakron.store import Run, Store, StoreError
+from omakron.store import Run, Store
 
 log = logging.getLogger("omakron.worker")
-
-
-class SnapshotSource(Protocol):
-    kind: str
-
-    def fetch(self, identifier: str) -> dict[str, Any]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,7 +51,6 @@ class Worker:
         self,
         *,
         store_factory: Callable[[], Store],
-        source: SnapshotSource,
         config: WorkerConfig,
         worker_id: str,
         wake: threading.Event,
@@ -67,7 +58,6 @@ class Worker:
     ):
         self._store_factory = store_factory
         self._store: Store | None = None
-        self.source = source
         self.config = config
         self.worker_id = worker_id
         self.wake = wake
@@ -96,7 +86,7 @@ class Worker:
         run = self.store.claim_next(self.worker_id)
         if run is None:
             return False
-        log.info("claimed run %s (%s)", run.id, run.parameter)
+        log.info("claimed run %s (%s)", run.id, run.routine_snapshot["name"])
         self.execute(run)
         return True
 
@@ -113,23 +103,27 @@ class Worker:
         except OSError as exc:
             self._fail(run, [f"output could not be stored: {exc}"])
             return
-        prepared = self._prepare_input(run, out_dir)
-        if prepared is None:
-            return
-        stdin_text, team_labels, extra_flags = prepared
         cwd = self._ensure_cwd(run, Path(run.routine_snapshot["cwd"]))
         if cwd is None:
             return
 
-        launch = Launch(
-            argv=claude_argv(
-                run.routine_snapshot["model"],
+        routine = run.routine_snapshot
+        try:
+            argv = claude_argv(
+                routine["model"],
                 executable=self.config.claude_executable,
-                extra=extra_flags,
-            ),
+                tools=routine.get("tools", "default"),
+                permission_mode=routine.get("permission_mode", "bypassPermissions"),
+                mcp_config=routine.get("mcp_config"),
+            )
+        except ValueError as exc:
+            self._fail(run, [str(exc)], output_dir=str(out_dir))
+            return
+        launch = Launch(
+            argv=argv,
             cwd=cwd,
-            env=child_env(),
-            stdin_text=stdin_text,
+            env=child_env(extra=routine.get("env_passthrough") or []),
+            stdin_text=routine["prompt"],  # the prompt is stdin, never argv
             deadline_s=run.deadline_s,
         )
 
@@ -158,35 +152,7 @@ class Worker:
         if supervised.storage_error:
             self._fail(run, [supervised.storage_error], output_dir=str(out_dir))
             return
-        self._judge_and_store(run, supervised, out_dir, team_labels)
-
-    def _prepare_input(
-        self, run: Run, out_dir: Path
-    ) -> tuple[str, list[str] | None, list[str]] | None:
-        """Fetch and store the issue snapshot; compose stdin. ``None`` means the run failed."""
-        prompt = run.routine_snapshot["prompt"]
-        if run.routine_snapshot.get("parameter_kind") != triage.PARAMETER_KIND:
-            return prompt, None, []
-        identifier = run.parameter
-        if not identifier:
-            self._fail(run, ["issue identifier is required"], output_dir=str(out_dir))
-            return None
-        try:
-            snapshot = self.source.fetch(identifier)
-        except SnapshotError as exc:
-            self._fail(run, [str(exc)], output_dir=str(out_dir))
-            return None
-        try:
-            write_durably(
-                out_dir / "snapshot.json",
-                (json.dumps(snapshot, indent=2, sort_keys=True) + "\n").encode("utf-8"),
-            )
-            self.store.set_input_snapshot(run.id, snapshot, snapshot_digest(snapshot))
-        except (OSError, StoreError) as exc:
-            self._fail(run, [f"input snapshot could not be stored: {exc}"], output_dir=str(out_dir))
-            return None
-        team_labels = list(snapshot.get("team_labels") or [])
-        return triage.compose_stdin(prompt, snapshot), team_labels, triage.system_prompt_flags()
+        self._record_and_store(run, supervised, out_dir)
 
     def _ensure_cwd(self, run: Run, cwd: Path) -> Path | None:
         """Only folders under the managed workdir are created; others must already exist."""
@@ -202,9 +168,7 @@ class Worker:
             return None
         return cwd
 
-    def _judge_and_store(
-        self, run: Run, supervised: Supervised, out_dir: Path, team_labels: list[str] | None
-    ) -> None:
+    def _record_and_store(self, run: Run, supervised: Supervised, out_dir: Path) -> None:
         try:
             stdout_text = supervised.stdout_path.read_text(encoding="utf-8", errors="replace")
         except OSError as exc:
@@ -218,24 +182,21 @@ class Worker:
             verdict = classify(
                 exit_code=supervised.exit_code,
                 stream=stream,
-                team_labels=team_labels,
                 timed_out=supervised.timed_out,
                 canceled=supervised.canceled,
                 interrupted=supervised.interrupted,
-                expected_issue_id=run.parameter,
             )
 
-        report_sha: str | None = None
+        output_sha: str | None = None
         if verdict.ok:
+            # The model's own result is what the run shows. Store it before the
+            # status says succeeded.
             try:
-                report_sha = write_durably(
-                    out_dir / "report.json",
-                    (json.dumps(verdict.report, indent=2, sort_keys=True) + "\n").encode("utf-8"),
+                output_sha = write_durably(
+                    out_dir / "result.md", stream.result_text.encode("utf-8")
                 )
             except OSError as exc:
-                verdict = Verdict(
-                    Outcome.FAILED, (f"output could not be stored: {exc}",), verdict.report
-                )
+                verdict = Verdict(Outcome.FAILED, (f"output could not be stored: {exc}",))
 
         self.store.finish_run(
             run.id,
@@ -244,9 +205,9 @@ class Worker:
             exit_code=supervised.exit_code,
             resolved_model=(stream.init or {}).get("model"),
             models_used=stream.resolved_models,
-            report=verdict.report,
+            result_text=stream.result_text or None,
             output_dir=str(out_dir),
-            output_sha256=report_sha,
+            output_sha256=output_sha,
             stderr_tail=supervised.stderr_tail or None,
         )
         log.info("run %s ended %s", run.id, verdict.outcome)

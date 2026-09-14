@@ -1,10 +1,10 @@
 """SQLite persistence for routines, runs, queue claims, and settings.
 
 Only the service process writes. Every run is claimed in one ``BEGIN
-IMMEDIATE`` transaction, carries an immutable snapshot of the routine revision
-it was launched from, and receives its input snapshot exactly once. Terminal
-status is written only after output is durably stored, so a row that says
-``succeeded`` always points at a report on disk.
+IMMEDIATE`` transaction and carries an immutable snapshot of the routine
+revision it was launched from. Terminal status is written only after output is
+durably stored, so a row that says ``succeeded`` always points at the model's
+result on disk.
 
 Location rules live in :func:`state_dir` and :func:`config_dir`; the schema
 lives here with its version so a later migration has a starting point.
@@ -23,7 +23,8 @@ from typing import Any
 
 from omakron.schedule import Schedule, ScheduleError
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
+MAX_RESULT_TEXT_CHARS = 64 * 1024  # the run row keeps this much; stdout.jsonl keeps it all
 
 # Non-terminal statuses. Terminal ones are the runner's ``Outcome`` values.
 QUEUED = "queued"
@@ -51,7 +52,10 @@ CREATE TABLE IF NOT EXISTS routines (
     timezone       TEXT,
     enabled        INTEGER NOT NULL DEFAULT 0,
     policy_version INTEGER NOT NULL DEFAULT 1,
-    parameter_kind TEXT,
+    tools          TEXT NOT NULL DEFAULT 'default',
+    permission_mode TEXT NOT NULL DEFAULT 'bypassPermissions',
+    mcp_config     TEXT,
+    env_passthrough TEXT NOT NULL DEFAULT '[]',
     created_at     TEXT NOT NULL,
     updated_at     TEXT NOT NULL,
     deleted_at     TEXT
@@ -61,11 +65,8 @@ CREATE TABLE IF NOT EXISTS runs (
     routine_id       TEXT NOT NULL REFERENCES routines(id),
     routine_revision INTEGER NOT NULL,
     trigger          TEXT NOT NULL,
-    parameter        TEXT,
     idempotency_key  TEXT UNIQUE,
     routine_snapshot TEXT NOT NULL,
-    input_snapshot   TEXT,
-    input_sha256     TEXT,
     status           TEXT NOT NULL,
     problems         TEXT NOT NULL DEFAULT '[]',
     enqueued_at      TEXT NOT NULL,
@@ -81,7 +82,7 @@ CREATE TABLE IF NOT EXISTS runs (
     resolved_model   TEXT,
     models_used      TEXT,
     exit_code        INTEGER,
-    report           TEXT,
+    result_text      TEXT,
     output_dir       TEXT,
     output_sha256    TEXT,
     stderr_tail      TEXT,
@@ -154,7 +155,10 @@ class Routine:
     timezone: str | None
     enabled: bool
     policy_version: int
-    parameter_kind: str | None
+    tools: str
+    permission_mode: str
+    mcp_config: str | None
+    env_passthrough: list[str]
     created_at: str
     updated_at: str
     deleted_at: str | None
@@ -172,7 +176,10 @@ class Routine:
             "timezone": self.timezone,
             "enabled": self.enabled,
             "policy_version": self.policy_version,
-            "parameter_kind": self.parameter_kind,
+            "tools": self.tools,
+            "permission_mode": self.permission_mode,
+            "mcp_config": self.mcp_config,
+            "env_passthrough": list(self.env_passthrough),
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "deleted_at": self.deleted_at,
@@ -188,7 +195,10 @@ class Routine:
             "model": self.model,
             "cwd": self.cwd,
             "policy_version": self.policy_version,
-            "parameter_kind": self.parameter_kind,
+            "tools": self.tools,
+            "permission_mode": self.permission_mode,
+            "mcp_config": self.mcp_config,
+            "env_passthrough": list(self.env_passthrough),
             "schedule_kind": self.schedule_kind,
             "cron": self.cron,
             "timezone": self.timezone,
@@ -201,11 +211,8 @@ class Run:
     routine_id: str
     routine_revision: int
     trigger: str
-    parameter: str | None
     idempotency_key: str | None
     routine_snapshot: dict[str, Any]
-    input_snapshot: dict[str, Any] | None
-    input_sha256: str | None
     status: str
     problems: list[str]
     enqueued_at: str
@@ -221,7 +228,7 @@ class Run:
     resolved_model: str | None
     models_used: list[str]
     exit_code: int | None
-    report: dict[str, Any] | None
+    result_text: str | None
     output_dir: str | None
     output_sha256: str | None
     stderr_tail: str | None
@@ -234,16 +241,14 @@ class Run:
     def terminal(self) -> bool:
         return self.status not in OPEN_STATUSES
 
-    def to_dict(self, *, include_input: bool = True) -> dict[str, Any]:
-        data = {
+    def to_dict(self) -> dict[str, Any]:
+        return {
             "id": self.id,
             "routine_id": self.routine_id,
             "routine_revision": self.routine_revision,
             "trigger": self.trigger,
-            "parameter": self.parameter,
             "idempotency_key": self.idempotency_key,
             "routine_snapshot": self.routine_snapshot,
-            "input_sha256": self.input_sha256,
             "status": self.status,
             "problems": self.problems,
             "enqueued_at": self.enqueued_at,
@@ -256,7 +261,7 @@ class Run:
             "resolved_model": self.resolved_model,
             "models_used": self.models_used,
             "exit_code": self.exit_code,
-            "report": self.report,
+            "result_text": self.result_text,
             "output_dir": self.output_dir,
             "output_sha256": self.output_sha256,
             "stderr_tail": self.stderr_tail,
@@ -265,9 +270,6 @@ class Run:
             "scheduled_at": self.scheduled_at,
             "local_slot": self.local_slot,
         }
-        if include_input:
-            data["input_snapshot"] = self.input_snapshot
-        return data
 
 
 def _json_or(value: str | None, default: Any) -> Any:
@@ -287,7 +289,10 @@ def _routine(row: sqlite3.Row) -> Routine:
         timezone=row["timezone"],
         enabled=bool(row["enabled"]),
         policy_version=row["policy_version"],
-        parameter_kind=row["parameter_kind"],
+        tools=row["tools"],
+        permission_mode=row["permission_mode"],
+        mcp_config=row["mcp_config"],
+        env_passthrough=_json_or(row["env_passthrough"], []),
         created_at=row["created_at"],
         updated_at=row["updated_at"],
         deleted_at=row["deleted_at"],
@@ -300,11 +305,8 @@ def _run(row: sqlite3.Row) -> Run:
         routine_id=row["routine_id"],
         routine_revision=row["routine_revision"],
         trigger=row["trigger"],
-        parameter=row["parameter"],
         idempotency_key=row["idempotency_key"],
         routine_snapshot=json.loads(row["routine_snapshot"]),
-        input_snapshot=_json_or(row["input_snapshot"], None),
-        input_sha256=row["input_sha256"],
         status=row["status"],
         problems=json.loads(row["problems"]),
         enqueued_at=row["enqueued_at"],
@@ -320,7 +322,7 @@ def _run(row: sqlite3.Row) -> Run:
         resolved_model=row["resolved_model"],
         models_used=_json_or(row["models_used"], []),
         exit_code=row["exit_code"],
-        report=_json_or(row["report"], None),
+        result_text=row["result_text"],
         output_dir=row["output_dir"],
         output_sha256=row["output_sha256"],
         stderr_tail=row["stderr_tail"],
@@ -358,14 +360,14 @@ class Store:
                 "SELECT value FROM schema_meta WHERE key = 'schema_version'"
             ).fetchone()
             version = int(row["value"]) if row else None
-            if version not in (1, SCHEMA_VERSION):
+            if version not in (1, 2, SCHEMA_VERSION):
                 self.conn.close()
                 raise StoreError(
                     f"database schema version {version} is not {SCHEMA_VERSION}; refusing to open"
                 )
-        if version == 1:
+        if version in (1, 2):
             backup_path = self.path.with_name(
-                self.path.name + ".v1-" + uuid.uuid4().hex + ".backup"
+                self.path.name + f".v{version}-" + uuid.uuid4().hex + ".backup"
             )
             backup = sqlite3.connect(backup_path)
             try:
@@ -373,14 +375,32 @@ class Store:
                 self.conn.backup(backup)
             finally:
                 backup.close()
-            self.conn.executescript(
-                "BEGIN IMMEDIATE;"  # noqa: S608 - only constant migration SQL
-                "ALTER TABLE runs ADD COLUMN scheduled_at TEXT;"
-                "ALTER TABLE runs ADD COLUMN local_slot TEXT;"
-                + SCHEMA
-                + "UPDATE schema_meta SET value='2' WHERE key='schema_version';"
-                "COMMIT;"
-            )
+            steps = ["BEGIN IMMEDIATE;"]
+            if version == 1:
+                steps += [
+                    "ALTER TABLE runs ADD COLUMN scheduled_at TEXT;",
+                    "ALTER TABLE runs ADD COLUMN local_slot TEXT;",
+                ]
+            # Version 3: a routine chooses its tools, permission mode, MCP config,
+            # and extra environment keys, and a run keeps the model's result text.
+            # The report-only issue triage columns go away with the feature.
+            steps += [
+                "ALTER TABLE routines ADD COLUMN tools TEXT NOT NULL DEFAULT 'default';",
+                "ALTER TABLE routines ADD COLUMN permission_mode TEXT NOT NULL"
+                " DEFAULT 'bypassPermissions';",
+                "ALTER TABLE routines ADD COLUMN mcp_config TEXT;",
+                "ALTER TABLE routines ADD COLUMN env_passthrough TEXT NOT NULL DEFAULT '[]';",
+                "ALTER TABLE routines DROP COLUMN parameter_kind;",
+                "ALTER TABLE runs ADD COLUMN result_text TEXT;",
+                "ALTER TABLE runs DROP COLUMN parameter;",
+                "ALTER TABLE runs DROP COLUMN input_snapshot;",
+                "ALTER TABLE runs DROP COLUMN input_sha256;",
+                "ALTER TABLE runs DROP COLUMN report;",
+                SCHEMA,
+                "UPDATE schema_meta SET value='3' WHERE key='schema_version';",
+                "COMMIT;",
+            ]
+            self.conn.executescript("".join(steps))
         else:
             self.conn.executescript(SCHEMA)
             self.conn.execute(
@@ -423,7 +443,10 @@ class Store:
         cron: str | None = None,
         timezone: str | None = None,
         enabled: bool = False,
-        parameter_kind: str | None = None,
+        tools: str = "default",
+        permission_mode: str = "bypassPermissions",
+        mcp_config: str | None = None,
+        env_passthrough: list[str] | None = None,
         routine_id: str | None = None,
     ) -> Routine:
         """Create a routine at revision 1. New routines start paused by default."""
@@ -445,8 +468,9 @@ class Store:
         with self._tx():
             self.conn.execute(
                 "INSERT INTO routines (id, revision, name, prompt, model, cwd, schedule_kind, cron,"
-                " timezone, enabled, policy_version, parameter_kind, created_at, updated_at)"
-                " VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)",
+                " timezone, enabled, policy_version, tools, permission_mode,"
+                " mcp_config, env_passthrough, created_at, updated_at)"
+                " VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)",
                 (
                     rid,
                     name,
@@ -457,7 +481,10 @@ class Store:
                     cron,
                     timezone,
                     int(enabled),
-                    parameter_kind,
+                    tools,
+                    permission_mode,
+                    mcp_config,
+                    json.dumps(list(env_passthrough or [])),
                     now,
                     now,
                 ),
@@ -477,8 +504,16 @@ class Store:
             "schedule_kind",
             "cron",
             "timezone",
-            "parameter_kind",
+            "tools",
+            "permission_mode",
+            "mcp_config",
+            "env_passthrough",
         )
+        values = dict(draft)
+        values["env_passthrough"] = json.dumps(list(draft.get("env_passthrough") or []))
+        values.setdefault("tools", "default")
+        values.setdefault("permission_mode", "bypassPermissions")
+        values.setdefault("mcp_config", None)
         with self._tx():
             current = self.get_routine(routine_id)
             if current.deleted_at or current.revision != expected_revision:
@@ -490,7 +525,7 @@ class Store:
             self.conn.execute(
                 f"UPDATE routines SET {assignments}, revision = revision + 1,"  # noqa: S608 - fixed field names
                 " enabled = 0, updated_at = ? WHERE id = ? AND revision = ?",
-                (*[draft[field] for field in fields], utc_now(), routine_id, expected_revision),
+                (*[values[field] for field in fields], utc_now(), routine_id, expected_revision),
             )
         return self.get_routine(routine_id)
 
@@ -577,7 +612,6 @@ class Store:
         routine: Routine,
         *,
         trigger: str,
-        parameter: str | None,
         idempotency_key: str | None,
         deadline_s: float,
         enqueued_at: str | None = None,
@@ -600,23 +634,18 @@ class Store:
                 ).fetchone()
                 if existing is not None:
                     prior = _run(existing)
-                    if (prior.routine_id, prior.parameter, prior.retry_of) != (
-                        routine.id,
-                        parameter,
-                        retry_of,
-                    ):
+                    if (prior.routine_id, prior.retry_of) != (routine.id, retry_of):
                         raise StoreError("idempotency key belongs to a different request")
                     return prior, False
             self.conn.execute(
-                "INSERT INTO runs (id, routine_id, routine_revision, trigger, parameter,"
+                "INSERT INTO runs (id, routine_id, routine_revision, trigger,"
                 " idempotency_key, routine_snapshot, status, enqueued_at, deadline_s,"
-                " requested_model, retry_of) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " requested_model, retry_of) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     run_id,
                     routine.id,
                     routine.revision,
                     trigger,
-                    parameter,
                     idempotency_key,
                     json.dumps(routine.snapshot(), sort_keys=True),
                     QUEUED,
@@ -676,17 +705,6 @@ class Store:
                 return None
         return self.get_run(run_id)
 
-    def set_input_snapshot(self, run_id: str, snapshot: dict[str, Any], sha256: str) -> None:
-        """Record the input exactly once; a second attempt is a programming error."""
-        with self._tx():
-            cur = self.conn.execute(
-                "UPDATE runs SET input_snapshot = ?, input_sha256 = ?"
-                " WHERE id = ? AND input_snapshot IS NULL",
-                (json.dumps(snapshot, sort_keys=True), sha256, run_id),
-            )
-            if cur.rowcount != 1:
-                raise StoreError(f"run {run_id} already has an input snapshot or does not exist")
-
     def mark_running(
         self, run_id: str, *, pid: int, pgid: int, proc_start: str, output_dir: str
     ) -> None:
@@ -708,7 +726,7 @@ class Store:
         exit_code: int | None = None,
         resolved_model: str | None = None,
         models_used: list[str] | None = None,
-        report: dict[str, Any] | None = None,
+        result_text: str | None = None,
         output_dir: str | None = None,
         output_sha256: str | None = None,
         stderr_tail: str | None = None,
@@ -716,10 +734,12 @@ class Store:
         """Write the terminal status. Only an open run can finish, and only once."""
         if status in OPEN_STATUSES:
             raise StoreError(f"{status} is not a terminal status")
+        if result_text is not None and len(result_text) > MAX_RESULT_TEXT_CHARS:
+            result_text = result_text[:MAX_RESULT_TEXT_CHARS]
         with self._tx():
             cur = self.conn.execute(
                 "UPDATE runs SET status = ?, problems = ?, ended_at = ?, exit_code = ?,"
-                " resolved_model = ?, models_used = ?, report = ?,"
+                " resolved_model = ?, models_used = ?, result_text = ?,"
                 " output_dir = COALESCE(?, output_dir), output_sha256 = ?, stderr_tail = ?"
                 " WHERE id = ? AND status IN ('queued', 'claimed', 'running')",
                 (
@@ -729,7 +749,7 @@ class Store:
                     exit_code,
                     resolved_model,
                     json.dumps(models_used or []),
-                    None if report is None else json.dumps(report, sort_keys=True),
+                    result_text,
                     output_dir,
                     output_sha256,
                     stderr_tail,

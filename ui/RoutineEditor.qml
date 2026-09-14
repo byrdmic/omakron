@@ -4,9 +4,10 @@ import qs.Commons
 import qs.Ui
 
 // Creates one routine. Name, prompt, and schedule are the whole form; the
-// working folder and model are prefilled from the service and stay folded
-// away unless the user asks for them. The next run times appear on their
-// own as the schedule changes, so there is nothing to press before saving.
+// working folder, model, tools, and permission mode are prefilled from the
+// service and stay folded away unless the user asks for them. The next run
+// times appear on their own as the schedule changes, so there is nothing to
+// press before saving.
 Column {
   id: root
   objectName: "routineEditor"
@@ -18,6 +19,7 @@ Column {
   property string previewText: ""
   property string previewKey: ""
   property string mode: "Daily"
+  property string permissionMode: ""
   property bool showMore: false
   readonly property color dim: Qt.darker(Color.foreground, 1.4)
   readonly property bool timed: mode === "Daily" || mode === "Weekdays" || mode === "Weekly"
@@ -38,7 +40,9 @@ Column {
   function draft() {
     return {name: name.text, prompt: prompt.text, model: model.text, cwd: folder.text,
       schedule_kind: mode === "Manual" ? "manual" : "cron", cron: cronExpression(),
-      timezone: mode === "Manual" ? null : timezone.text, parameter_kind: null}
+      timezone: mode === "Manual" ? null : timezone.text,
+      tools: tools.text, permission_mode: permissionMode || root.defaults.permission_mode || "bypassPermissions",
+      mcp_config: null, env_passthrough: []}
   }
   function scheduleChanged() {
     previewText = ""
@@ -96,7 +100,7 @@ Column {
       font.pixelSize: Style.font.title
       font.bold: true
     }
-    Caption { text: "A saved prompt that Claude Code runs on a schedule and reports back on." }
+    Caption { text: "A saved prompt that Claude Code runs on a schedule, with its usual tools." }
   }
 
   PanelSeparator { width: parent.width }
@@ -128,7 +132,7 @@ Column {
       Controls.TextArea {
         id: prompt
         objectName: "field_prompt"
-        placeholderText: "What should Claude Code look at, and what should the report say?"
+        placeholderText: "What should Claude Code do, and what should it reply with when done?"
         placeholderTextColor: Qt.darker(Color.foreground, 1.6)
         wrapMode: TextEdit.Wrap
         selectByMouse: true
@@ -229,7 +233,7 @@ Column {
   Caption { id: previewLabel; text: root.previewText; visible: text !== "" }
 
   Button {
-    text: root.showMore ? "Hide working folder and model" : "Working folder and model"
+    text: root.showMore ? "Hide folder, model, and tools" : "Working folder, model, and tools"
     iconText: root.showMore ? "󰅃" : "󰅀"
     fontSize: Style.font.bodySmall
     focusable: true
@@ -252,7 +256,7 @@ Column {
         Accessible.name: "Working folder"
         onActiveFocusChanged: if (activeFocus) root.revealRequested(folder)
       }
-      Caption { text: "Claude Code starts in this folder. Reports are written here." }
+      Caption { text: "Claude Code starts in this folder and can change what is in it." }
     }
     Column {
       width: parent.width
@@ -268,11 +272,36 @@ Column {
       }
       Caption { text: (root.defaults.verified_models || []).indexOf(model.text) >= 0 ? "This model has been verified with Omakron." : "This model is unverified. Runs will not fall back to another model." }
     }
+    Column {
+      width: parent.width
+      spacing: Style.spacing.labelGap
+      FieldLabel { text: "Tools" }
+      TextField {
+        id: tools
+        objectName: "field_tools"
+        width: parent.width
+        text: root.defaults.tools || "default"
+        placeholderText: "default"
+        Accessible.name: "Claude Code tools"
+        onActiveFocusChanged: if (activeFocus) root.revealRequested(tools)
+      }
+      Caption { text: "\"default\" is Claude Code's full tool set. Leave it empty for no tools, or list tool names separated by commas, such as Read,Edit,Bash." }
+    }
+    Dropdown {
+      id: permission
+      objectName: "field_permission"
+      width: parent.width
+      label: "Permission mode"
+      value: root.permissionMode || root.defaults.permission_mode || "bypassPermissions"
+      options: root.defaults.permission_modes || ["bypassPermissions", "acceptEdits", "auto", "dontAsk", "manual", "plan"]
+      onChanged: function(value) { root.permissionMode = value }
+    }
+    Caption { text: "Nobody answers prompts during a scheduled run. bypassPermissions lets the run act on its own; a narrower mode denies whatever would have asked." }
   }
 
   PanelSeparator { width: parent.width }
 
-  Caption { text: (root.defaults.policy || "Report only. No tools.") + " New routines start paused so you can review them first." }
+  Caption { text: (root.defaults.policy || "Claude Code runs with its usual tools and no permission prompts.") + " New routines start paused so you can review them first." }
   Caption { text: root.error; visible: text !== ""; color: Color.urgent }
 
   Row {

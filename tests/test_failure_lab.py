@@ -48,9 +48,7 @@ def test_queue_expiry_at_exact_fake_time(tmp_path, monkeypatch, age, claimed):
     )
     store = Store(tmp_path / "lab.db")
     routine = store.create_routine(name="Fake", prompt="fake", model="fake", cwd=str(tmp_path))
-    run, _ = store.enqueue_run(
-        routine, trigger="manual", parameter=None, idempotency_key="request", deadline_s=1
-    )
+    run, _ = store.enqueue_run(routine, trigger="manual", idempotency_key="request", deadline_s=1)
     now += dt.timedelta(seconds=age)
     assert bool(store.claim_next("lab")) is claimed
     assert store.get_run(run.id).status == ("claimed" if claimed else "skipped")
@@ -62,14 +60,14 @@ def test_duplicate_request_after_restart_returns_original_interrupted_run(tmp_pa
     store = Store(path)
     routine = store.create_routine(name="Fake", prompt="fake", model="fake", cwd=str(tmp_path))
     run, _ = store.enqueue_run(
-        routine, trigger="manual", parameter=None, idempotency_key="same-request", deadline_s=1
+        routine, trigger="manual", idempotency_key="same-request", deadline_s=1
     )
     store.claim_next("before-crash")
     store.close()
     store = Store(path)
     store.reconcile("after-crash")
     same, created = store.enqueue_run(
-        routine, trigger="manual", parameter=None, idempotency_key="same-request", deadline_s=1
+        routine, trigger="manual", idempotency_key="same-request", deadline_s=1
     )
     assert not created and same.id == run.id and same.status == "interrupted"
     assert store.claim_next("after-crash") is None

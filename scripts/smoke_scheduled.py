@@ -7,10 +7,9 @@ import shutil
 import time
 from pathlib import Path
 
-from omakron import triage
-from omakron.report import validate_report
+from omakron import seed
 from omakron.runner import DEFAULT_MODEL
-from smoke_vertical_slice import SECRET_PATTERNS, SNAPSHOTS, Smoke
+from smoke_vertical_slice import SECRET_PATTERNS, Smoke
 
 
 def smoke(out: Path, evidence: Path, claude: str):  # noqa: PLR0915 - one sequential smoke scenario
@@ -19,13 +18,7 @@ def smoke(out: Path, evidence: Path, claude: str):  # noqa: PLR0915 - one sequen
     session = Smoke(out, evidence, claude, 120)
     session.config.mkdir()
     (session.config / "settings.json").write_text(
-        json.dumps(
-            {
-                "claude_executable": claude,
-                "deadline_s": 120,
-                "snapshot_source": {"kind": "fixture", "dir": str(SNAPSHOTS)},
-            }
-        )
+        json.dumps({"claude_executable": claude, "deadline_s": 120})
     )
     session.data["check"] = "scheduled dispatch"
     result = {"check": "scheduled dispatch", "result": "failed"}
@@ -33,16 +26,15 @@ def smoke(out: Path, evidence: Path, claude: str):  # noqa: PLR0915 - one sequen
         session.start_service()
         now = dt.datetime.now(dt.UTC)
         due = now.replace(second=0, microsecond=0) + dt.timedelta(minutes=1)
-        snapshot = json.loads((SNAPSHOTS / "DEMO-9999.json").read_text())
-        folder = out / "fixture"
+        folder = out / "scratch"
         folder.mkdir()
-        (folder / "untouched.txt").write_text("This fixture must remain unchanged.\n")
-        before = (folder / "untouched.txt").read_bytes()
+        (folder / "notes.txt").write_text("A scratch folder for the scheduled smoke test.\n")
+        before = (folder / "notes.txt").read_bytes()
         routine = session.request(
             "create_routine",
             {
-                "name": "Scheduled synthetic triage smoke",
-                "prompt": triage.compose_stdin(triage.PROMPT, snapshot),
+                "name": "Scheduled folder summary smoke",
+                "prompt": seed.PROMPT,
                 "cwd": str(folder),
                 "model": DEFAULT_MODEL,
                 "schedule_kind": "cron",
@@ -87,11 +79,9 @@ def smoke(out: Path, evidence: Path, claude: str):  # noqa: PLR0915 - one sequen
         result["run"] = found
         assert found["status"] == "succeeded", found["problems"]
         assert dt.datetime.fromisoformat(found["scheduled_at"].replace("Z", "+00:00")) == due
-        assert not validate_report(
-            found["report"], team_labels=["Bug", "Feature", "Improvement", "Docs"]
-        )
-        assert (folder / "untouched.txt").read_bytes() == before
-        assert sorted(p.name for p in folder.iterdir()) == ["untouched.txt"]
+        assert found["result_text"].strip(), "the model's result is kept"
+        assert (folder / "SUMMARY.md").is_file(), "the model wrote what the prompt asked"
+        assert (folder / "notes.txt").read_bytes() == before
         session.stop_service()
         session.start_service()
         after = session.request("get_run", {"run_id": found["id"]})["run"]
@@ -105,12 +95,12 @@ def smoke(out: Path, evidence: Path, claude: str):  # noqa: PLR0915 - one sequen
             checks=[
                 "one scheduled result",
                 "exact due instant",
-                "report validation",
-                "fixture unchanged",
+                "summary written by the model",
+                "scratch note unchanged",
                 "restart retains result without replay",
             ],
         )
-        (evidence / "triage-report.json").write_text(json.dumps(found["report"], indent=2) + "\n")
+        (evidence / "result.md").write_text(found["result_text"].rstrip() + "\n")
         print("Scheduled smoke passed; saved result survived restart.", flush=True)
     finally:
         if session.proc and session.proc.poll() is None:

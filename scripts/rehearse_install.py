@@ -105,13 +105,7 @@ class Rehearsal:
         atomic_json(self.layout.shell, original_shell)
         atomic_json(
             self.layout.config / "omakron/settings.json",
-            {
-                "claude_executable": str(REPO / "tests/fake_claude.py"),
-                "snapshot_source": {
-                    "kind": "fixture",
-                    "dir": str(REPO / "tests/fixtures/snapshots"),
-                },
-            },
+            {"claude_executable": str(REPO / "tests/fake_claude.py")},
         )
         old = run(["git", "-C", str(REPO), "rev-parse", baseline])
         previews = []
@@ -136,21 +130,17 @@ class Rehearsal:
         routine = self.request("list_routines")["routines"][0]
         original = self.request(
             "run_now",
-            {
-                "routine_id": routine["id"],
-                "parameter": "DEMO-9999",
-                "idempotency_key": "pre-upgrade",
-            },
+            {"routine_id": routine["id"], "idempotency_key": "pre-upgrade"},
         )["run"]
         result = wait_for_run(original["id"], timeout_s=15, interval_s=0.1, sock=self.socket)
         assert result["status"] == "succeeded"
         baseline_schema = self.schema()
-        report = result["report"]
+        report = result["result_text"]
         set_widget(self.layout.shell, True)
         assert shell_without_plugin(json.loads(self.layout.shell.read_text())) == original_shell
         backup = self.manager.upgrade(str(REPO), revision)
-        assert self.schema() == "2"
-        assert self.request("get_run", {"run_id": original["id"]})["run"]["report"] == report
+        assert self.schema() == "3"
+        assert self.request("get_run", {"run_id": original["id"]})["run"]["result_text"] == report
         assert not self.request("status")["service"]["dispatch_enabled"]
         # Verify the actual cloned UI inside a copied native Omarchy shell.
         subprocess.run(
@@ -170,7 +160,7 @@ class Rehearsal:
         self.manager.close()
         self.start()
         restored = self.request("get_run", {"run_id": original["id"]})["run"]
-        assert restored["report"] == report
+        assert restored["result_text"] == report
         self.stop()
         # Also exercise the automatic rollback path with a real failed checkout.
         try:
@@ -194,12 +184,10 @@ class Rehearsal:
                     "old_revision": old,
                     "candidate_revision": revision,
                     "old_schema": int(baseline_schema),
-                    "new_schema": 2,
+                    "new_schema": 3,
                     "restored_schema": int(baseline_schema),
                     "retained_run": original["id"],
-                    "retained_report_sha256": hashlib.sha256(
-                        json.dumps(report, sort_keys=True).encode()
-                    ).hexdigest(),
+                    "retained_result_sha256": hashlib.sha256(report.encode()).hexdigest(),
                     "checks": [
                         "all dry runs unchanged",
                         "exact git clones",

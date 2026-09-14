@@ -99,11 +99,21 @@ def build_parser() -> argparse.ArgumentParser:
     create.add_argument("--model", default="claude-sonnet-5")
     create.add_argument("--cwd", required=True)
     create.add_argument("--enabled", action="store_true")
-    create.add_argument("--parameter-kind", choices=["linear_issue"])
+    create.add_argument(
+        "--tools", default="default", help='"default", "", or a comma-separated tool list'
+    )
+    create.add_argument("--permission-mode", default="bypassPermissions")
+    create.add_argument("--mcp-config", help="absolute path to an MCP config JSON file")
+    create.add_argument(
+        "--env",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help="an environment variable the run inherits; repeatable",
+    )
 
     run_now = sub.add_parser("run-now", help="queue one run of a routine")
     run_now.add_argument("routine_id")
-    run_now.add_argument("--issue", help="Linear issue identifier to triage, e.g. DEMO-123")
     run_now.add_argument("--key", help="idempotency key; default: a fresh UUID")
     run_now.add_argument("--wait", type=float, metavar="SECONDS", help="wait for the run to end")
 
@@ -111,7 +121,7 @@ def build_parser() -> argparse.ArgumentParser:
     runs.add_argument("--routine")
     runs.add_argument("--limit", type=int, default=30)
 
-    run = sub.add_parser("run", help="one run with its input snapshot and report")
+    run = sub.add_parser("run", help="one run with its result and diagnostics")
     run.add_argument("run_id")
 
     cancel = sub.add_parser("cancel", help="cancel a queued or running run")
@@ -157,13 +167,15 @@ def _dispatch(args: argparse.Namespace) -> Any:
             "model": args.model,
             "cwd": args.cwd,
             "enabled": args.enabled,
-            "parameter_kind": args.parameter_kind,
+            "tools": args.tools,
+            "permission_mode": args.permission_mode,
+            "mcp_config": args.mcp_config,
+            "env_passthrough": args.env,
         }
         return request("create_routine", params, sock=sock)
     if args.command == "run-now":
         params = {
             "routine_id": args.routine_id,
-            "parameter": args.issue,
             "idempotency_key": args.key or str(uuid.uuid4()),
         }
         result = request("run_now", params, sock=sock)

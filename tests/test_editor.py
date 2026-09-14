@@ -10,14 +10,13 @@ from omakron.client import ServiceError
 def draft(service):
     defaults = service.request("editor_defaults")
     return dict(
-        name="Daily report",
-        prompt="Return the report.",
+        name="Daily summary",
+        prompt="Summarize the folder.",
         model=defaults["model"],
         cwd=defaults["cwd"],
         schedule_kind="cron",
         cron="0 9 * * 1-5",
         timezone="America/New_York",
-        parameter_kind=None,
     )
 
 
@@ -79,20 +78,25 @@ def test_preview_uses_the_lab_evaluator_for_dst(service):
     assert "OR" in result["convention"]
 
 
-def test_manual_triage_cannot_accidentally_be_scheduled(service):
-    saved = service.triage_routine()
-    with pytest.raises(ServiceError, match="manual issue identifier"):
-        service.request(
-            "update_routine",
-            dict(
-                saved,
-                routine_id=saved["id"],
-                expected_revision=1,
-                schedule_kind="cron",
-                cron="0 9 * * *",
-                timezone="UTC",
-            ),
-        )
+def test_execution_choices_round_trip_and_default(service, tmp_path):
+    mcp = tmp_path / "mcp.json"
+    mcp.write_text("{}")
+    chosen = dict(
+        draft(service),
+        tools="Read,Grep",
+        permission_mode="plan",
+        mcp_config=str(mcp),
+        env_passthrough=["GH_TOKEN", "GH_TOKEN"],
+    )
+    saved = service.request("create_routine", chosen)["routine"]
+    assert saved["tools"] == "Read,Grep" and saved["permission_mode"] == "plan"
+    assert saved["mcp_config"] == str(mcp) and saved["env_passthrough"] == ["GH_TOKEN"]
+    plain = service.request("create_routine", dict(draft(service), name="Plain"))["routine"]
+    assert plain["tools"] == "default" and plain["permission_mode"] == "bypassPermissions"
+    assert plain["mcp_config"] is None and plain["env_passthrough"] == []
+    defaults = service.request("editor_defaults")
+    assert defaults["permission_mode"] == "bypassPermissions"
+    assert "bypassPermissions" in defaults["permission_modes"]
 
 
 def test_raw_client_keeps_prompt_data_out_of_shell(service):

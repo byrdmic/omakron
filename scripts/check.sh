@@ -6,7 +6,6 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-TEAM_LABELS="Bug,Feature,Improvement,Docs"   # labels offered in the synthetic snapshot
 export PYTHONPATH=src
 
 must_fail() {
@@ -26,12 +25,10 @@ ruff format --check .
 echo "== unit and fake-CLI tests"
 pytest -q
 
-echo "== manifest and synthetic report checks"
+echo "== manifest check"
 python -m omakron.checks manifest .
-python -m omakron.checks report tests/fixtures/reports/valid-triage-report.json --team-labels "$TEAM_LABELS"
 
 echo "== fixtures built to fail"
-must_fail "malformed report"  python -m omakron.checks report tests/fixtures/reports/exit-zero-malformed.json --team-labels "$TEAM_LABELS"
 must_fail "broken manifest"   python -m omakron.checks manifest tests/fixtures/plugins/missing-entrypoint
 must_fail "usage error"       python -m omakron.checks
 

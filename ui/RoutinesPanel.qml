@@ -26,7 +26,7 @@ Panel {
   readonly property bool samples: sampleState !== ""
   readonly property var sampleRows: [
     {name: "Morning repository report", schedule_kind: "cron", cron: "0 9 * * 1-5", timezone: "UTC"},
-    {name: "Issue triage", schedule_kind: "manual", cron: null, timezone: null}
+    {name: "Folder summary", schedule_kind: "manual", cron: null, timezone: null}
   ]
   readonly property var rows: samples ? (sampleState === "ready" ? sampleRows : []) : routines
   readonly property bool loading: samples ? sampleState === "loading" : (!loaded && error === "")
@@ -133,7 +133,7 @@ Panel {
                 font.pixelSize: Style.font.title
                 font.bold: true
               }
-              Caption { text: "Scheduled Claude Code reports" }
+              Caption { text: "Scheduled Claude Code routines" }
             }
 
             PanelSeparator { width: parent.width }
@@ -156,7 +156,7 @@ Panel {
             }
             Body {
               visible: !root.loading && !root.disconnected && root.rows.length === 0
-              text: "No routines yet.\nCreate one to schedule a report."
+              text: "No routines yet."
               color: root.dim
               topPadding: Style.space(12)
               bottomPadding: Style.space(12)

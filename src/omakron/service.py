@@ -2,7 +2,7 @@
 
 ``python -m omakron.service`` runs it in the foreground; the proposed systemd
 unit in ``packaging/`` would start the same command. On start it opens the
-store, seeds the one saved routine if the database is empty, marks runs a
+store, seeds the example routine if the database is empty, marks runs a
 previous instance left open as interrupted (and stops their orphaned
 processes when they can be identified), then serves requests on a user-only
 Unix socket while one worker thread executes runs.
@@ -26,16 +26,22 @@ import socket
 import sys
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from omakron import __version__, history, ipc, manage, routines, triage
+from omakron import __version__, history, ipc, manage, routines, seed
 from omakron.client import socket_path
-from omakron.runner import DEFAULT_MODEL, proc_start_ticks, stop_process_group
+from omakron.runner import (
+    DEFAULT_MODEL,
+    DEFAULT_PERMISSION_MODE,
+    DEFAULT_TOOLS,
+    PERMISSION_MODES,
+    proc_start_ticks,
+    stop_process_group,
+)
 from omakron.schedule import CONVENTION, Schedule
 from omakron.scheduler import Scheduler
-from omakron.snapshot import InboxSource, SnapshotError, source_from_settings
 from omakron.store import Routine, Store, StoreError, config_dir, parse_utc, state_dir, utc_now
 from omakron.worker import Worker, WorkerConfig
 
@@ -51,7 +57,6 @@ MAX_NAME_CHARS = 120
 class Settings:
     claude_executable: str = "claude"
     deadline_s: float = DEFAULT_DEADLINE_S
-    snapshot_source: dict[str, Any] = field(default_factory=dict)
     enforce_compatibility: bool = False
 
     @classmethod
@@ -64,17 +69,13 @@ class Settings:
             raise ValueError(f"{path} is not a JSON object")
         executable = obj.get("claude_executable", "claude")
         deadline = obj.get("deadline_s", DEFAULT_DEADLINE_S)
-        source = obj.get("snapshot_source", {})
         if not isinstance(executable, str) or not executable:
             raise ValueError("claude_executable must be a non-empty string")
         if isinstance(deadline, bool) or not isinstance(deadline, int | float) or deadline <= 0:
             raise ValueError("deadline_s must be a positive number")
-        if not isinstance(source, dict):
-            raise ValueError("snapshot_source must be an object")
         return cls(
             claude_executable=executable,
             deadline_s=float(deadline),
-            snapshot_source=source,
             enforce_compatibility=obj.get("enforce_compatibility", False) is True,
         )
 
@@ -116,7 +117,6 @@ class Service(history.HistoryApi):
         self.settings = Settings.load(self.config_dir)
         if self.settings.enforce_compatibility:
             manage.compatibility()
-        source = source_from_settings(self.settings.snapshot_source, self.config_dir)
         self.state_dir.mkdir(parents=True, exist_ok=True)
         self.lock_file = (self.state_dir / "service.lock").open("a")
         try:
@@ -134,7 +134,6 @@ class Service(history.HistoryApi):
         db_path = self.state_dir / "omakron.db"
         worker = Worker(
             store_factory=lambda: Store(db_path),
-            source=source,
             config=WorkerConfig(
                 claude_executable=self.settings.claude_executable,
                 runs_dir=self.runs_dir,
@@ -149,20 +148,19 @@ class Service(history.HistoryApi):
         )
         self.worker_thread.start()
         log.info(
-            "omakron %s serving on %s as %s (source=%s, claude=%s)",
+            "omakron %s serving on %s as %s (claude=%s)",
             __version__,
             self.socket_path,
             self.worker_id,
-            source.kind,
             self.settings.claude_executable,
         )
 
     def _seed(self) -> None:
         assert self.api_store is not None
         if not self.api_store.list_routines(include_deleted=True):
-            cwd = str(self.workdir / "triage")
-            self.api_store.create_routine(**triage.seed_definition(cwd))
-            log.info("seeded routine %r", triage.ROUTINE_NAME)
+            cwd = str(self.workdir / seed.FOLDER_NAME)
+            self.api_store.create_routine(**seed.seed_definition(cwd))
+            log.info("seeded routine %r", seed.ROUTINE_NAME)
 
     def _reconcile(self) -> None:
         assert self.api_store is not None
@@ -310,20 +308,11 @@ class Service(history.HistoryApi):
                 "claude_executable": self.settings.claude_executable,
                 "deadline_s": self.settings.deadline_s,
                 "dispatch_enabled": self.scheduler.enabled if self.scheduler else False,
-                "snapshot_source": (self.settings.snapshot_source or {}).get("kind", "linear"),
                 "interrupted_on_start": self.interrupted_on_start,
             },
-            "active_run": None if active is None else active.to_dict(include_input=False),
+            "active_run": None if active is None else active.to_dict(),
             "routines": len(store.list_routines()),
         }
-
-    def op_import_snapshot(self, params: dict[str, Any]) -> dict[str, Any]:
-        if self.settings.snapshot_source.get("kind") != "inbox":
-            raise ApiError("configuration", "snapshot_source.kind must be inbox before importing")
-        try:
-            return InboxSource(self.config_dir / "inbox").accept(params.get("snapshot"))
-        except (ValueError, SnapshotError) as exc:
-            raise ApiError("invalid_snapshot", str(exc)) from exc
 
     def op_list_routines(self, params: dict[str, Any]) -> dict[str, Any]:
         return {"routines": [r.to_dict() for r in self._store().list_routines()]}
@@ -380,12 +369,17 @@ class Service(history.HistoryApi):
 
     def op_editor_defaults(self, params: dict[str, Any]) -> dict[str, Any]:
         return {
-            "cwd": str(self.workdir / "reports"),
+            "cwd": str(self.workdir / "routines"),
             "model": DEFAULT_MODEL,
             "timezone": "UTC",
-            "policy": f"Report only. No tools. {self.settings.deadline_s:g} second deadline.",
+            "tools": DEFAULT_TOOLS,
+            "permission_mode": DEFAULT_PERMISSION_MODE,
+            "permission_modes": list(PERMISSION_MODES),
+            "policy": (
+                "Claude Code runs with its usual tools and no permission prompts. "
+                f"{self.settings.deadline_s:g} second deadline."
+            ),
             "verified_models": [DEFAULT_MODEL],
-            "input_source": self.settings.snapshot_source.get("kind", "linear"),
         }
 
     def op_set_enabled(self, params: dict[str, Any]) -> dict[str, Any]:
@@ -428,14 +422,6 @@ class Service(history.HistoryApi):
         routine = self._routine(params)
         if routine.deleted_at is not None:
             raise ApiError("not_found", f"routine {routine.id} is deleted")
-        parameter: str | None = None
-        if routine.parameter_kind == triage.PARAMETER_KIND:
-            try:
-                parameter = triage.normalize_identifier(params.get("parameter"))
-            except ValueError as exc:
-                raise ApiError("invalid_parameter", str(exc)) from exc
-        elif params.get("parameter") not in (None, ""):
-            raise ApiError("invalid_parameter", "this routine takes no parameter")
         key = params.get("idempotency_key")
         if key is not None and (
             not isinstance(key, str) or not key or len(key) > MAX_IDEMPOTENCY_KEY_CHARS
@@ -444,12 +430,11 @@ class Service(history.HistoryApi):
         run, created = self._store().enqueue_run(
             routine,
             trigger="manual",
-            parameter=parameter,
             idempotency_key=key,
             deadline_s=self.settings.deadline_s,
         )
         self.wake.set()
-        return {"run": run.to_dict(include_input=False), "created": created}
+        return {"run": run.to_dict(), "created": created}
 
     def op_list_runs(self, params: dict[str, Any]) -> dict[str, Any]:
         routine_id = params.get("routine_id")
@@ -480,7 +465,7 @@ class Service(history.HistoryApi):
         except StoreError as exc:
             raise ApiError("conflict", str(exc)) from exc
         self.wake.set()
-        return {"run": run.to_dict(include_input=False)}
+        return {"run": run.to_dict()}
 
 
 def _gone_within(pid: int, seconds: float) -> bool:

@@ -7,8 +7,6 @@ import sys
 
 from .conftest import FIXTURES, REPO_ROOT
 
-VALID_REPORT = FIXTURES / "reports" / "valid-triage-report.json"
-BROKEN_REPORT = FIXTURES / "reports" / "exit-zero-malformed.json"
 BROKEN_PLUGIN = FIXTURES / "plugins" / "missing-entrypoint"
 
 
@@ -23,19 +21,6 @@ def run(*args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-def test_valid_report_passes():
-    result = run("report", str(VALID_REPORT), "--team-labels", "Bug,Feature,Improvement,Docs")
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert result.stdout.strip() == "report: ok"
-
-
-def test_broken_report_fails_with_problems_listed():
-    result = run("report", str(BROKEN_REPORT), "--team-labels", "Bug,Feature,Improvement,Docs")
-    assert result.returncode == 1
-    assert "report: FAIL (5 problems)" in result.stdout
-    assert "missing missing_information" in result.stdout
-
-
 def test_repository_manifest_passes():
     result = run("manifest", str(REPO_ROOT))
     assert result.returncode == 0, result.stdout + result.stderr
@@ -47,10 +32,13 @@ def test_broken_manifest_fails():
     assert "entry point file not found" in result.stdout
 
 
-def test_unreadable_report_is_a_failure_not_a_crash():
-    result = run("report", str(FIXTURES / "does-not-exist.json"))
-    assert result.returncode == 1
-    assert result.stdout.startswith("cannot read report:")
+def test_stream_check_records_a_clean_exit(tmp_path):
+    transcript = tmp_path / "stdout.jsonl"
+    transcript.write_text('{"type": "result", "is_error": false, "result": "done"}\n')
+    assert run("stream", str(transcript)).returncode == 0
+    failed = run("stream", str(transcript), "--exit-code", "1")
+    assert failed.returncode == 1 and "exit status 1" in failed.stdout
+    assert run("stream", str(tmp_path / "missing.jsonl")).stdout.startswith("cannot read")
 
 
 def test_usage_error_is_distinct():

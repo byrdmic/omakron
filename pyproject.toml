@@ -29,9 +29,6 @@ line-length = 100
 src = ["src", "tests", "scripts"]
 extend-exclude = ["docs"]
 
-[tool.ruff.format]
-exclude = ["scripts/verify_runner_profile.py"]  # standalone runner-profile verifier
-
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "S", "PL"]
 ignore = [
@@ -42,6 +39,3 @@ ignore = [
     "PLR0911", # classifier returns one named outcome per branch
     "PLR0912", # validators enumerate contract rules
 ]
-
-[tool.ruff.lint.per-file-ignores]
-"scripts/verify_runner_profile.py" = ["ALL"]  # standalone runner-profile verifier

@@ -1,6 +1,8 @@
-"""Exit zero alone is insufficient: outcomes come from supervisor facts plus the contract."""
+"""A run succeeds on a clean exit; what the model said is kept, not judged."""
 
 from __future__ import annotations
+
+import pytest
 
 from omakron.runner import (
     BASE_FLAGS,
@@ -11,7 +13,7 @@ from omakron.runner import (
     parse_stream,
 )
 
-from .conftest import FAKE_CLAUDE, TEAM_LABELS
+from .conftest import FAKE_CLAUDE
 
 
 def argv_for_fake() -> list[str]:
@@ -23,40 +25,35 @@ def test_profile_reaches_the_executable(fake_claude, tmp_path):
     recorded = (tmp_path / "argv.json").read_text()
     for flag in BASE_FLAGS:
         assert flag in recorded
-    assert '"--tools", ""' in recorded
+    assert '"--tools", "default"' in recorded
+    assert '"--permission-mode", "bypassPermissions"' in recorded
+    assert "--dangerously-skip-permissions" in recorded
+    for retired in ("--safe-mode", "--restricted", "--strict-mcp-config"):
+        assert retired not in recorded
     assert "prompt on stdin" not in recorded
     assert run.exit_code == 0
 
 
-def test_ok_run_succeeds_with_report(fake_claude):
+def test_argv_carries_the_routine_choices():
+    argv = claude_argv(
+        "claude-opus-5", tools="Read,Edit", permission_mode="acceptEdits", mcp_config="/m.json"
+    )
+    assert argv[argv.index("--tools") + 1] == "Read,Edit"
+    assert argv[argv.index("--permission-mode") + 1] == "acceptEdits"
+    assert argv[argv.index("--mcp-config") + 1] == "/m.json"
+    assert "--dangerously-skip-permissions" not in argv
+    assert "--mcp-config" not in claude_argv()
+    with pytest.raises(ValueError, match="permission_mode"):
+        claude_argv(permission_mode="yolo")
+
+
+def test_ok_run_succeeds_and_keeps_the_result_text(fake_claude):
     run = fake_claude(argv_for_fake(), mode="ok")
-    verdict = classify(
-        exit_code=run.exit_code, stream=parse_stream(run.stdout), team_labels=TEAM_LABELS
-    )
-    assert verdict.outcome is Outcome.SUCCEEDED
-    assert verdict.report["issue_id"] == "DEMO-9999"
-    assert parse_stream(run.stdout).resolved_models == ["claude-sonnet-5"]
-
-
-def test_exit_zero_with_prose_is_a_failure(fake_claude):
-    run = fake_claude(argv_for_fake(), mode="malformed")
-    assert run.exit_code == 0
-    verdict = classify(
-        exit_code=run.exit_code, stream=parse_stream(run.stdout), team_labels=TEAM_LABELS
-    )
-    assert verdict.outcome is Outcome.FAILED
-    assert verdict.problems == ("result text is not a JSON object",)
-
-
-def test_exit_zero_with_contract_breach_is_a_failure(fake_claude):
-    run = fake_claude(argv_for_fake(), mode="contract")
-    assert run.exit_code == 0
-    verdict = classify(
-        exit_code=run.exit_code, stream=parse_stream(run.stdout), team_labels=TEAM_LABELS
-    )
-    assert verdict.outcome is Outcome.FAILED
-    assert "next_step too short to be actionable" in verdict.problems
-    assert verdict.report is not None  # kept so the run detail can show what was rejected
+    stream = parse_stream(run.stdout)
+    verdict = classify(exit_code=run.exit_code, stream=stream)
+    assert verdict.outcome is Outcome.SUCCEEDED and verdict.problems == ()
+    assert stream.result_text.startswith("The working folder is empty")
+    assert stream.resolved_models == ["claude-sonnet-5"]
 
 
 def test_error_result_is_a_failure_naming_the_message(fake_claude):
@@ -67,13 +64,13 @@ def test_error_result_is_a_failure_naming_the_message(fake_claude):
     assert any("Not logged in" in p for p in verdict.problems)
 
 
-def test_tool_use_is_a_failure_even_with_a_valid_report(fake_claude):
+def test_tool_use_is_normal(fake_claude, tmp_path):
     run = fake_claude(argv_for_fake(), mode="tool")
-    verdict = classify(
-        exit_code=run.exit_code, stream=parse_stream(run.stdout), team_labels=TEAM_LABELS
-    )
-    assert verdict.outcome is Outcome.FAILED
-    assert verdict.problems == ("forbidden tool use observed: ['Write']",)
+    stream = parse_stream(run.stdout)
+    assert [t["name"] for t in stream.tool_uses] == ["Write"]
+    assert (tmp_path / "TOOL_WROTE.txt").is_file()
+    verdict = classify(exit_code=run.exit_code, stream=stream)
+    assert verdict.outcome is Outcome.SUCCEEDED
 
 
 def test_supervisor_facts_win_over_model_output():
@@ -90,8 +87,17 @@ def test_parse_stream_counts_garbage_instead_of_raising():
     assert parsed.result_text == "x"
 
 
-def test_child_env_drops_everything_but_the_passthrough():
-    env = child_env(
-        {"PATH": "/usr/bin", "HOME": "/h", "CLAUDE_CODE_SSE_PORT": "1", "AWS_SECRET": "x"}
-    )
-    assert env == {"PATH": "/usr/bin", "HOME": "/h"}
+def test_child_env_is_the_base_list_plus_the_routine_keys():
+    source = {
+        "PATH": "/usr/bin",
+        "HOME": "/h",
+        "SSH_AUTH_SOCK": "/s",
+        "CLAUDE_CODE_SSE_PORT": "1",
+        "ANTHROPIC_API_KEY": "x",
+        "AWS_SECRET": "y",
+    }
+    assert child_env(source) == {"PATH": "/usr/bin", "HOME": "/h", "SSH_AUTH_SOCK": "/s"}
+    widened = child_env(source, extra=["ANTHROPIC_API_KEY", "CLAUDE_CODE_SSE_PORT", "MISSING"])
+    assert widened["ANTHROPIC_API_KEY"] == "x"
+    assert "CLAUDE_CODE_SSE_PORT" not in widened, "a parent Claude session never leaks in"
+    assert "AWS_SECRET" not in widened

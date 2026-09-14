@@ -15,7 +15,7 @@ LOG_PREVIEW_BYTES = 16 * 1024
 
 
 def failure(run: Run) -> dict:
-    """Explain supervisor evidence; never use report text as execution status."""
+    """Explain a run that did not succeed from supervisor evidence."""
     evidence = " ".join(run.problems).lower() + " " + (run.stderr_tail or "").lower()
     kind = run.status
     help_text = ""
@@ -47,10 +47,11 @@ def failure(run: Run) -> dict:
                 "model",
                 "Choose an available model in Edit, save, then retry the saved revision.",
             )
-        elif any(word in evidence for word in ("permission", "forbidden", "tool_use")):
+        elif any(word in evidence for word in ("permission", "forbidden")):
             kind, help_text = (
                 "permission",
-                "The report-only policy refused tools. Correct the prompt before retrying.",
+                "Something was refused. Check the routine's permission mode and tools, "
+                "then retry explicitly.",
             )
     elif run.status == "timed_out":
         help_text = (
@@ -72,7 +73,6 @@ def summary(run: Run) -> dict:
             "routine_revision",
             "status",
             "trigger",
-            "parameter",
             "enqueued_at",
             "started_at",
             "ended_at",
@@ -119,7 +119,7 @@ def output_settings(store: Store) -> dict:
 
 
 def retention_candidates(store: Store, runs_dir: Path, days: int) -> list[Path]:
-    """Only successful, expired diagnostics. Reports and all failed output survive."""
+    """Only successful, expired diagnostics. Results and all failed output survive."""
     cutoff = dt.datetime.now(dt.UTC) - dt.timedelta(days=days)
     candidates = []
     rows = store.conn.execute("SELECT id,ended_at FROM runs WHERE status='succeeded'")
@@ -183,7 +183,6 @@ class HistoryApi:
         run, created = self._store().enqueue_run(
             routine,
             trigger="manual",
-            parameter=original.parameter,
             idempotency_key=key,
             deadline_s=self.settings.deadline_s,
             retry_of=original.id,
@@ -225,5 +224,5 @@ class HistoryApi:
         return {
             "files": names,
             "applied": params.get("apply") is True,
-            "policy": "Expired successful diagnostics only. Reports and failed output remain.",
+            "policy": "Expired successful diagnostics only. Results and failed output remain.",
         }

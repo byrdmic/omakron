@@ -95,7 +95,6 @@ class Scheduler:
         run, _ = self.store.enqueue_run(
             routine,
             trigger="scheduled",
-            parameter=None,
             idempotency_key=f"scheduled:{routine.id}:{slot}",
             deadline_s=self.deadline_s,
             enqueued_at=stamp(now),

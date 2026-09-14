@@ -8,29 +8,15 @@ against real inputs that must pass and against fixtures built to fail.
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from pathlib import Path
 
 from omakron.plugin import validate_manifest_dir
-from omakron.report import validate_report
 from omakron.runner import classify, parse_stream
-
-
-def _labels(value: str | None) -> list[str] | None:
-    return None if value is None else [x.strip() for x in value.split(",") if x.strip()]
 
 
 def check_manifest(args: argparse.Namespace) -> list[str]:
     return validate_manifest_dir(Path(args.plugin_dir))
-
-
-def check_report(args: argparse.Namespace) -> list[str]:
-    try:
-        obj = json.loads(Path(args.report).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
-        return [f"cannot read report: {exc}"]
-    return validate_report(obj, _labels(args.team_labels))
 
 
 def check_stream(args: argparse.Namespace) -> list[str]:
@@ -38,9 +24,7 @@ def check_stream(args: argparse.Namespace) -> list[str]:
         text = Path(args.transcript).read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as exc:
         return [f"cannot read transcript: {exc}"]
-    verdict = classify(
-        exit_code=args.exit_code, stream=parse_stream(text), team_labels=_labels(args.team_labels)
-    )
+    verdict = classify(exit_code=args.exit_code, stream=parse_stream(text))
     return [] if verdict.ok else [f"{verdict.outcome}: {p}" for p in verdict.problems]
 
 
@@ -52,15 +36,9 @@ def build_parser() -> argparse.ArgumentParser:
     manifest.add_argument("plugin_dir")
     manifest.set_defaults(func=check_manifest)
 
-    report = sub.add_parser("report", help="validate a saved triage report")
-    report.add_argument("report")
-    report.add_argument("--team-labels", help="comma-separated labels the snapshot offered")
-    report.set_defaults(func=check_report)
-
     stream = sub.add_parser("stream", help="classify a stream-json transcript as a run outcome")
     stream.add_argument("transcript")
     stream.add_argument("--exit-code", type=int, default=0)
-    stream.add_argument("--team-labels")
     stream.set_defaults(func=check_stream)
     return parser
 

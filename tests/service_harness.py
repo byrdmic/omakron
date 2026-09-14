@@ -27,7 +27,6 @@ from omakron import client as omakron_client
 TESTS_DIR = Path(__file__).resolve().parent
 REPO_ROOT = TESTS_DIR.parent
 FAKE_CLAUDE = TESTS_DIR / "fake_claude.py"
-SNAPSHOTS = TESTS_DIR / "fixtures" / "snapshots"
 MAX_SOCKET_PATH = 100  # AF_UNIX paths are limited to 108 bytes on Linux
 
 
@@ -58,7 +57,6 @@ def tree_digest(root: Path) -> tuple[str, list[str]]:
 class ServiceHarness:
     root: Path
     deadline_s: float = 600.0
-    snapshot_source: dict[str, Any] | None = None
     extra_env: dict[str, str] = field(default_factory=dict)
     proc: subprocess.Popen | None = None
 
@@ -83,15 +81,8 @@ class ServiceHarness:
             encoding="utf-8",
         )
         self.wrapper.chmod(0o755)
-        source = self.snapshot_source or {"kind": "fixture", "dir": str(SNAPSHOTS)}
         (self.config / "settings.json").write_text(
-            json.dumps(
-                {
-                    "claude_executable": str(self.wrapper),
-                    "deadline_s": self.deadline_s,
-                    "snapshot_source": source,
-                }
-            ),
+            json.dumps({"claude_executable": str(self.wrapper), "deadline_s": self.deadline_s}),
             encoding="utf-8",
         )
 
@@ -194,13 +185,15 @@ class ServiceHarness:
             timeout=timeout,
         )
 
-    def triage_routine(self) -> dict[str, Any]:
+    def seed_routine(self) -> dict[str, Any]:
+        """The routine the service seeds."""
         routines = self.request("list_routines")["routines"]
         assert len(routines) >= 1
         return routines[0]
 
-    def run_now(self, issue: str | None, key: str | None = None) -> dict[str, Any]:
-        params = {"routine_id": self.triage_routine()["id"], "parameter": issue}
+    def run_now(self, key: str | None = None) -> dict[str, Any]:
+        """Queue one run of the seeded routine."""
+        params: dict[str, Any] = {"routine_id": self.seed_routine()["id"]}
         if key is not None:
             params["idempotency_key"] = key
         return self.request("run_now", params)

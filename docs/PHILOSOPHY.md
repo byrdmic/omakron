@@ -7,9 +7,8 @@ decides what to do each run. The service starts it, keeps it within a time
 and output budget, records what happened, and shows the result. The service
 does not second-guess the work.
 
-This page states the position so contributors build in one direction. It is
-not a description of the current code. Several modules were written the other
-way and are being changed to match. See "What changes" below.
+This page states the position so contributors build in one direction. The
+code follows it; the last section says where.
 
 ## The position
 
@@ -18,15 +17,14 @@ terminal, a routine can do on a schedule. The routine author is responsible
 for what the prompt asks for and which tools it is given.
 
 The model has tools. A routine can read and edit files, run commands, use git,
-and talk to outside services such as Trello through the same skills and MCP
-servers a person would use. The service does not stand between the model and
-those services.
+and talk to outside services through the same skills and MCP servers a person
+would use. The service does not stand between the model and those services.
 
 The model reports its own outcome. A run succeeds when the process exits
 cleanly and the result event reports no error. The service does not require a
-report in a fixed shape and does not check the model's claims against a
-contract. If the model says it moved a card and opened a branch, the run
-record says so, and the person reads the run record.
+result in a fixed shape and does not check the model's claims. If the model
+says it finished the work, the run record says so, and the person reads the
+run record.
 
 The service is a scheduler and a recorder, not a judge. It owns the queue,
 the run history, the deadline, the output limits, cancel, and retry. It keeps
@@ -35,17 +33,20 @@ bookkeeping, not distrust.
 
 Autonomy comes from the account, not from the tool. Routines run with the
 signed-in Claude Code account and whatever access that account already has.
-Omakron does not add its own permission layer on top.
+Omakron does not add its own permission layer on top. By default a routine
+runs with the CLI's usual tools and no permission prompts; the routine author
+can narrow that.
 
-## What this means for two example routines
+## What this means for a routine
 
-Triage. The routine reads the board through the Trello skill, decides labels,
-priority, and next step for each new card, and writes them to the card itself.
-There is no read-only snapshot and no service-side write step.
+A triage routine reads a board or tracker through the same skill or MCP
+server a person would use, decides labels, priority, and next step for each
+new item, and writes them to the item itself. There is no read-only snapshot
+and no service-side write step.
 
-Coding. The routine looks for cards marked ready, picks one, works in the
+A coding routine looks for items marked ready, picks one, works in the
 project folder, writes and runs code, commits to a branch, and updates the
-card with the branch link and a summary. The routine decides when the card is
+item with the branch link and a summary. The routine decides when the item is
 done. A person reviews the branch when they choose to.
 
 ## What this is not
@@ -54,34 +55,35 @@ This is not the "verify the contract" approach. That approach treats the
 model's output as data to be validated and keeps the model away from outside
 systems. Omakron considered it and chose against it for 2026. The trade is
 stated plainly: a run can be marked successful when the work was wrong, and
-the person finds out by reading the run record or the board. Omakron accepts
-that trade in exchange for routines that can do real work unattended.
+the person finds out by reading the run record or the work itself. Omakron
+accepts that trade in exchange for routines that can do real work unattended.
+
+The first version of Omakron was built that way, around a report-only issue
+triage with a checked JSON report. That code was removed rather than kept as
+an option, so there is one way to run.
 
 This is also not "thin glue over cron". Runs are durable records with a
 claimed status and a saved routine revision, overlap of the same routine is
 prevented, and missed occurrences are skipped rather than piled up. The
 service exists so those guarantees hold.
 
-## What changes
+## Where the code follows this
 
-The following current behaviors contradict this page and are scheduled to be
-removed or relaxed. Contributors should not extend them.
-
-- The invocation profile in `src/omakron/runner.py` passes `--restricted`,
-  `--safe-mode`, `--strict-mcp-config`, and `--permission-prompts none`. A
-  routine needs tools, skills, and MCP servers, so the profile becomes a
-  per-routine choice with a permissive default.
-- `classify` in `src/omakron/runner.py` fails a run for any tool use and for
-  any result that does not validate as a triage report. Tool use becomes
-  normal, and the report contract becomes optional per routine.
-- `src/omakron/snapshot.py` fetches issues on the model's behalf. The model
-  fetches its own work through its tools. Snapshot sources stay only for
-  routines that opt into them.
-- `src/omakron/triage.py` hard-codes a report-only Linear routine with no
-  tools. The seeded routine becomes a Trello triage routine with tools.
-- The child environment in `runner.py` is filtered to six keys. The routine
-  author chooses what the child inherits, and the default passes through the
-  keys the account's skills and MCP servers need.
+- A routine carries `tools`, `permission_mode`, `mcp_config`, and
+  `env_passthrough`. `src/omakron/routines.py` validates them and
+  `src/omakron/store.py` saves them with every revision.
+- `src/omakron/runner.py` builds the invocation from those choices. The
+  defaults are the CLI's full tool set and `bypassPermissions`. There is no
+  `--safe-mode` or `--restricted`, so the account's CLAUDE.md, skills, plugins,
+  hooks, and MCP servers apply.
+- `classify` in `src/omakron/runner.py` marks a run succeeded on exit status
+  zero and a result event without an error. Tool use is never a failure, and
+  the result text is kept as the model wrote it.
+- The child environment is the session basics plus whatever keys the routine
+  names. Keys from a parent Claude Code session are never inherited.
+- `src/omakron/seed.py` seeds an example routine with tools.
+- The model's result is stored as `result.md` in the run folder and shown in
+  the run detail. A run is not marked succeeded until that file is written.
 
 ## What stays
 
@@ -89,6 +91,6 @@ removed or relaxed. Contributors should not extend them.
 - Every run is claimed in a transaction and carries an immutable revision.
 - Every run has a deadline and an output budget, and both are settings.
 - Cancel and retry are explicit, and retry links to the original run.
-- Prompt text and card text travel on stdin, never on argv.
+- Prompt text and input text travel on stdin, never on argv.
 - Tests never call the real CLI. The fake executable and fake clock stay.
 - Run output, logs, and screenshots stay outside the repository.

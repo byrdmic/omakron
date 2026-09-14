@@ -15,7 +15,6 @@ TESTS_DIR = Path(__file__).resolve().parent
 REPO_ROOT = TESTS_DIR.parent
 FIXTURES = TESTS_DIR / "fixtures"
 FAKE_CLAUDE = TESTS_DIR / "fake_claude.py"
-TEAM_LABELS = ["Bug", "Feature", "Improvement", "Docs"]
 
 
 @dataclass
@@ -86,7 +85,7 @@ def fake_claude(tmp_path: Path):
 
 @pytest.fixture
 def service(tmp_path: Path):
-    """A running service with the fake CLI and the fixture snapshot source."""
+    """A running service with the fake CLI."""
     harness = ServiceHarness(tmp_path).start()
     try:
         yield harness
@@ -96,7 +95,7 @@ def service(tmp_path: Path):
 
 @pytest.fixture
 def service_factory(tmp_path: Path):
-    """Build services with non-default settings (deadline, snapshot source)."""
+    """Build services with non-default settings (deadline, extra environment)."""
     made: list[ServiceHarness] = []
 
     def make(name: str = "svc", **kwargs) -> ServiceHarness:

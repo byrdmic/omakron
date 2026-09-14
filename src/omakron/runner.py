@@ -1,10 +1,13 @@
-"""Claude CLI invocation profile and run outcome classification.
+"""Claude CLI invocation profile, process supervision, and run outcome.
 
-The invocation profile is shared by the service, tests, and verification scripts.
-:func:`supervise` runs one process in its own process group with a wall-clock
-deadline, a stop check for cancellation and shutdown, and bounded output
-captured to files. :func:`classify` judges the finished process; that rule
-does not depend on who launched it.
+The invocation profile is shared by the service, tests, and smoke scripts. A
+routine chooses its tools, permission mode, MCP config, and extra environment
+keys; the service launches Claude Code with those choices and does not add a
+permission layer of its own (see docs/PHILOSOPHY.md). :func:`supervise` runs
+one process in its own process group with a wall-clock deadline, a stop check
+for cancellation and shutdown, and bounded output captured to files.
+:func:`classify` records how the process ended. A run succeeds when the
+process exits cleanly and its result event reports no error.
 """
 
 from __future__ import annotations
@@ -21,50 +24,95 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from omakron.report import extract_json_object, validate_report
-
 DEFAULT_MODEL = "claude-sonnet-5"
 
-# Flags shared by every restricted invocation.
+# Flags shared by every non-interactive run. Nobody answers permission prompts
+# during a scheduled run, so the permission mode decides everything.
 BASE_FLAGS: tuple[str, ...] = (
     "--print",
     "--output-format",
     "stream-json",
     "--verbose",
-    "--safe-mode",  # no CLAUDE.md, skills, plugins, hooks, MCP, custom agents
-    "--restricted",  # no code-running tools; settings ignored
-    "--strict-mcp-config",  # only MCP servers passed via --mcp-config (none)
     "--permission-prompts",
-    "none",  # anything that would prompt is denied
+    "none",
     "--no-session-persistence",
     "--disable-slash-commands",
 )
 
-# Environment keys passed through to the child. Everything else, including
-# CLAUDE_CODE_* from a parent Claude session, is dropped.
-ENV_PASSTHROUGH: tuple[str, ...] = ("PATH", "HOME", "LANG", "LC_ALL", "XDG_RUNTIME_DIR", "TZ")
+# Permission modes the CLI accepts. Runs are unattended, so the default lets
+# the model act without a prompt; a routine may choose a narrower mode.
+PERMISSION_MODES: tuple[str, ...] = (
+    "bypassPermissions",
+    "acceptEdits",
+    "auto",
+    "dontAsk",
+    "manual",
+    "plan",
+)
+DEFAULT_PERMISSION_MODE = "bypassPermissions"
+DEFAULT_TOOLS = "default"  # the CLI's own tool set; "" disables every tool
+
+# Environment keys every child inherits: the session basics that the CLI, its
+# skills, and MCP servers commonly need. CLAUDE_CODE_* from a parent Claude
+# session is never inherited. A routine names further keys in env_passthrough.
+ENV_PASSTHROUGH: tuple[str, ...] = (
+    "PATH",
+    "HOME",
+    "USER",
+    "LOGNAME",
+    "SHELL",
+    "LANG",
+    "LC_ALL",
+    "TZ",
+    "TERM",
+    "EDITOR",
+    "XDG_RUNTIME_DIR",
+    "XDG_CONFIG_HOME",
+    "XDG_DATA_HOME",
+    "XDG_STATE_HOME",
+    "XDG_CACHE_HOME",
+    "DBUS_SESSION_BUS_ADDRESS",
+    "SSH_AUTH_SOCK",
+    "CLAUDE_CONFIG_DIR",
+)
+ENV_KEY_PATTERN = r"[A-Za-z_][A-Za-z0-9_]*"
+MAX_ENV_KEYS = 64
 
 
 def claude_argv(
     model: str = DEFAULT_MODEL,
     *,
     executable: str = "claude",
-    tools: Iterable[str] = (),
+    tools: str = DEFAULT_TOOLS,
+    permission_mode: str = DEFAULT_PERMISSION_MODE,
+    mcp_config: str | None = None,
     extra: Iterable[str] = (),
 ) -> list[str]:
-    """Build the argument list for one restricted, non-interactive run.
+    """Build the argument list for one non-interactive run.
 
-    ``tools`` is empty for the report-only triage routine: the model receives
-    the issue snapshot on stdin and has nothing to call. Prompt text is never
-    part of argv.
+    ``tools`` is the CLI's ``--tools`` value: ``"default"`` for its full set,
+    ``""`` for none, or a comma-separated list. ``bypassPermissions`` also needs
+    the CLI's explicit opt-in flag. Prompt text is never part of argv.
     """
-    return [executable, *BASE_FLAGS, "--model", model, "--tools", ",".join(tools), *extra]
+    if permission_mode not in PERMISSION_MODES:
+        raise ValueError(f"permission_mode must be one of {', '.join(PERMISSION_MODES)}")
+    argv = [executable, *BASE_FLAGS, "--model", model, "--tools", tools]
+    argv += ["--permission-mode", permission_mode]
+    if permission_mode == "bypassPermissions":
+        argv.append("--dangerously-skip-permissions")
+    if mcp_config:
+        argv += ["--mcp-config", mcp_config]
+    argv.extend(extra)
+    return argv
 
 
-def child_env(source: Mapping[str, str] | None = None) -> dict[str, str]:
-    """Filtered environment for the child process."""
+def child_env(
+    source: Mapping[str, str] | None = None, *, extra: Iterable[str] = ()
+) -> dict[str, str]:
+    """Environment for the child: the base passthrough plus the routine's own keys."""
     src = os.environ if source is None else source
-    return {key: src[key] for key in ENV_PASSTHROUGH if key in src}
+    keys = [*ENV_PASSTHROUGH, *extra]
+    return {key: src[key] for key in keys if key in src and not key.startswith("CLAUDE_CODE_")}
 
 
 class Outcome(enum.StrEnum):
@@ -136,7 +184,6 @@ class Verdict:
 
     outcome: Outcome
     problems: tuple[str, ...] = ()
-    report: dict | None = None
 
     @property
     def ok(self) -> bool:
@@ -147,19 +194,15 @@ def classify(
     *,
     exit_code: int | None,
     stream: ParsedStream,
-    team_labels: Iterable[str] | None = None,
     timed_out: bool = False,
     canceled: bool = False,
     interrupted: bool = False,
-    expected_issue_id: str | None = None,
 ) -> Verdict:
-    """Judge a finished run.
+    """Record how a run ended.
 
-    The order matters: supervisor facts (cancel, deadline, shutdown, exit
-    status) come before anything the model said, and a report is only accepted
-    when it parses, passes the contract, and is about the issue that was
-    asked for. An exit status of zero with unusable output is a failure, never
-    a success with a caveat.
+    Supervisor facts (cancel, deadline, shutdown) come first. After that a run
+    succeeds when the process exited with status zero and its result event
+    reports no error. What the model said is kept, not judged.
     """
     if canceled:
         return Verdict(Outcome.CANCELED, ("canceled by user",))
@@ -177,31 +220,14 @@ def classify(
         problems.append("no result event in output")
     elif stream.result.get("is_error"):
         problems.append(f"result reported an error: {stream.result_text[:200]!r}")
-    if stream.tool_uses:
-        problems.append(
-            f"forbidden tool use observed: {sorted({t['name'] for t in stream.tool_uses})}"
-        )
     if problems:
         return Verdict(Outcome.FAILED, tuple(problems))
-
-    report = extract_json_object(stream.result_text)
-    if report is None:
-        return Verdict(Outcome.FAILED, ("result text is not a JSON object",))
-    contract = validate_report(report, team_labels)
-    if contract:
-        return Verdict(Outcome.FAILED, tuple(contract), report)
-    if expected_issue_id is not None and report.get("issue_id") != expected_issue_id:
-        return Verdict(
-            Outcome.FAILED,
-            (f"report is about {report.get('issue_id')!r}, not {expected_issue_id}",),
-            report,
-        )
-    return Verdict(Outcome.SUCCEEDED, (), report)
+    return Verdict(Outcome.SUCCEEDED, ())
 
 
 # ----------------------------------------------------------------- supervision
 
-MAX_OUTPUT_BYTES = 8 * 1024 * 1024  # stream-json for a report-only run is a few KiB
+MAX_OUTPUT_BYTES = 8 * 1024 * 1024  # a routine that uses tools can produce a long transcript
 STDERR_TAIL_CHARS = 2000
 STOP_CANCEL = "cancel"
 STOP_SHUTDOWN = "shutdown"

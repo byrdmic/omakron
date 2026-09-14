@@ -40,7 +40,7 @@ python scripts/manage.py enable-widget --apply
 
 The widget appears after Agents in the right bar.
 Other shell entries keep their values and order.
-The service seeds the manual triage routine without enabling recurrence.
+The service seeds the manual example routine without enabling recurrence.
 Scheduled routines need their saved policy enabled and global dispatch resumed.
 
 The generated unit lives at $XDG_CONFIG_HOME/systemd/user/omakron.service.

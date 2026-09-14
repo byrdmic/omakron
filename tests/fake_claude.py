@@ -5,11 +5,11 @@ Speaks just enough of ``claude -p --output-format stream-json`` for the runner
 to be exercised without a login, a network, or a model. The behavior is chosen
 by ``FAKE_CLAUDE_MODE``:
 
-- ``ok``         exit 0, ``is_error: false``, result text is the valid fixture report
-- ``malformed``  exit 0, ``is_error: false``, result text is prose (exit zero must not pass)
-- ``contract``   exit 0, result parses as JSON but breaks the report contract
+- ``ok``         exit 0, ``is_error: false``, a short prose result
 - ``error``      exit 1, ``is_error: true`` with an auth-style message
-- ``tool``       exit 0, valid report but an assistant tool_use event appears first
+- ``tool``       exit 0, a tool_use event, a file really written in the working
+                 folder (``TOOL_WROTE.txt``), then a prose result naming it
+- ``chatty``     like ``ok`` after a few KiB of assistant text (output-limit tests)
 - ``hang``       never emits a result; sleeps until killed (deadline/cancel tests)
 - ``slow``       like ``ok`` after a 3 s pause (a client can disconnect meanwhile)
 - ``badmodel``   exit 1, ``is_error: true`` with the CLI's unknown-model message
@@ -31,7 +31,7 @@ import sys
 import time
 from pathlib import Path
 
-FIXTURES = Path(__file__).resolve().parent / "fixtures" / "reports"
+OK_TEXT = "The working folder is empty, so there is nothing to summarize yet."
 
 
 def emit(event: dict) -> None:
@@ -99,22 +99,30 @@ def main() -> int:
         )
         return 1
 
-    if mode == "malformed":
-        text = "Here is my triage: it looks like a Medium priority bug. Next: ask for logs."
-    elif mode == "contract":
-        text = (FIXTURES / "exit-zero-malformed.json").read_text(encoding="utf-8")
+    if mode == "tool":
+        Path("TOOL_WROTE.txt").write_text("written by the fake Write tool\n", encoding="utf-8")
+        text = "I wrote TOOL_WROTE.txt in the working folder as asked."
     else:
-        text = (FIXTURES / "valid-triage-report.json").read_text(encoding="utf-8")
+        text = OK_TEXT
 
     if mode == "tool":
         emit(
             {
                 "type": "assistant",
                 "message": {
-                    "content": [{"type": "tool_use", "name": "Write", "input": {"file_path": "x"}}]
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "name": "Write",
+                            "input": {"file_path": "TOOL_WROTE.txt"},
+                        }
+                    ]
                 },
             }
         )
+    if mode == "chatty":
+        filler = "Looking around the folder. " * 200
+        emit({"type": "assistant", "message": {"content": [{"type": "text", "text": filler}]}})
     emit({"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}})
     emit(
         {

@@ -217,9 +217,10 @@ def test_v1_upgrade_preserves_data_and_creates_readable_backup(tmp_path):
         )
     store = Store(path)
     assert store.get_routine("r").prompt == "Original"
+    assert store.get_routine("r").tools == "default"
     assert (
         store.conn.execute("SELECT value FROM schema_meta WHERE key='schema_version'").fetchone()[0]
-        == "2"
+        == "3"
     )
     backup = next(tmp_path.glob("*.backup"))
     with sqlite3.connect(backup) as connection:

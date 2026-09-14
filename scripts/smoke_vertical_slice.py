@@ -2,16 +2,18 @@
 """Manual execution smoke test: the vertical slice with the real ``claude`` CLI.
 
 Starts the real service in a disposable state/config/socket under ``--out``,
-queues one Run now for the synthetic issue ``DEMO-9999`` through the real
-client, lets the client exit, waits for the run, checks the saved report
-against the contract, restarts the service, and checks the result is still
-there. One bounded model call is made under the existing login. Nothing under
-the real ``~/.config`` or ``~/.local/state`` is touched.
+queues one Run now of the seeded routine through the real client, lets the
+client exit, waits for the run, checks that the model did what the prompt
+asked (a ``SUMMARY.md`` in the working folder) and that its result was stored,
+restarts the service, and checks the result is still there. One bounded model
+call is made under the existing login, with the routine's default tools and
+permission mode. Nothing under the real ``~/.config`` or ``~/.local/state`` is
+touched.
 
 The verification result is written to ``--evidence`` (default
-``<out>/evidence``): ``report.md``, ``report.json``, and the
-model's ``triage-report.json``. Exit status is non-zero when any check fails,
-including a missing login (the run then fails with the CLI's own message).
+``<out>/evidence``): ``report.md``, ``report.json``, and the model's
+``result.md``. Exit status is non-zero when any check fails, including a
+missing login (the run then fails with the CLI's own message).
 
 Usage:
     PYTHONPATH=src python scripts/smoke_vertical_slice.py --out /path/to/scratch
@@ -36,10 +38,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from omakron import client as omakron_client  # noqa: E402
-from omakron.report import validate_report  # noqa: E402
+from omakron import seed  # noqa: E402
 
-SNAPSHOTS = REPO_ROOT / "tests" / "fixtures" / "snapshots"
-ISSUE = "DEMO-9999"
 SECRET_PATTERNS = [
     re.compile(r"sk-ant-[A-Za-z0-9_-]{8,}"),
     re.compile(r"lin_api_[A-Za-z0-9]{8,}"),
@@ -147,14 +147,7 @@ class Smoke:
             shutil.rmtree(self.out)
         self.config.mkdir(parents=True)
         (self.config / "settings.json").write_text(
-            json.dumps(
-                {
-                    "claude_executable": self.claude,
-                    "deadline_s": self.deadline_s,
-                    "snapshot_source": {"kind": "fixture", "dir": str(SNAPSHOTS)},
-                },
-                indent=2,
-            )
+            json.dumps({"claude_executable": self.claude, "deadline_s": self.deadline_s}, indent=2)
         )
         version = subprocess.run(
             [self.claude, "--version"], capture_output=True, text=True, timeout=30, check=False
@@ -167,16 +160,29 @@ class Smoke:
         routine = routines[0]
         self.check(
             "seeded_routine",
-            len(routines) == 1 and routine["parameter_kind"] == "linear_issue",
-            f"name={routine['name']!r} model={routine['model']} revision={routine['revision']}",
+            len(routines) == 1
+            and routine["name"] == seed.ROUTINE_NAME
+            and routine["tools"] == "default",
+            f"name={routine['name']!r} model={routine['model']} revision={routine['revision']} "
+            f"tools={routine['tools']!r} permission_mode={routine['permission_mode']}",
         )
         self.data["routine"] = {
-            k: routine[k] for k in ("id", "name", "model", "schedule_kind", "enabled", "revision")
+            k: routine[k]
+            for k in (
+                "id",
+                "name",
+                "model",
+                "schedule_kind",
+                "enabled",
+                "revision",
+                "tools",
+                "permission_mode",
+            )
         }
 
         # Run now through the real client; the client exits before the run ends.
         t0 = time.monotonic()
-        result = self.client("run-now", routine["id"], "--issue", ISSUE.lower())
+        result = self.client("run-now", routine["id"])
         client_elapsed = time.monotonic() - t0
         run = json.loads(result.stdout)["run"] if result.returncode == 0 else None
         self.check(
@@ -204,7 +210,6 @@ class Smoke:
                 "id",
                 "status",
                 "problems",
-                "parameter",
                 "routine_revision",
                 "requested_model",
                 "resolved_model",
@@ -215,7 +220,6 @@ class Smoke:
                 "started_at",
                 "ended_at",
                 "deadline_s",
-                "input_sha256",
                 "output_sha256",
             )
         }
@@ -231,29 +235,28 @@ class Smoke:
             f"requested={routine['model']} resolved={done['resolved_model']} "
             f"models_used={done['models_used']}",
         )
-        report = done.get("report")
-        labels = (done.get("input_snapshot") or {}).get("team_labels")
-        problems = validate_report(report, labels) if report else ["no report"]
+        result_text = done.get("result_text") or ""
+        summary = Path(routine["cwd"]) / "SUMMARY.md"
         self.check(
-            "report_passes_contract_for_the_named_issue",
-            not problems and report["issue_id"] == ISSUE,
-            f"problems={problems} issue_id={report and report.get('issue_id')}",
+            "model_did_what_the_prompt_asked",
+            summary.is_file() and summary.stat().st_size > 0 and bool(result_text.strip()),
+            f"summary_exists={summary.is_file()} result_chars={len(result_text)}",
         )
         run_dir = Path(done["output_dir"]) if done.get("output_dir") else None
-        on_disk = run_dir is not None and (run_dir / "report.json").is_file()
+        on_disk = run_dir is not None and (run_dir / "result.md").is_file()
         digest_ok = False
         if on_disk:
             digest_ok = (
-                hashlib.sha256((run_dir / "report.json").read_bytes()).hexdigest()
+                hashlib.sha256((run_dir / "result.md").read_bytes()).hexdigest()
                 == done["output_sha256"]
             )
         self.check(
-            "report_stored_durably_with_matching_digest",
+            "result_stored_durably_with_matching_digest",
             on_disk and digest_ok and not list(run_dir.glob("*.part")),
             f"files={sorted(p.name for p in run_dir.iterdir()) if run_dir else None}",
         )
-        if report:
-            self.data["saved_report"] = report
+        if result_text:
+            self.data["saved_result"] = result_text
 
         # Restart the app: the result must still be there, and nothing is replayed.
         exit_code = self.stop_service()
@@ -264,9 +267,9 @@ class Smoke:
         self.check(
             "result_survives_restart",
             again["status"] == "succeeded"
-            and again["report"] == report
+            and again["result_text"] == result_text
             and again["output_sha256"] == done["output_sha256"],
-            f"status={again['status']} same_report={again['report'] == report}",
+            f"status={again['status']} same_result={again['result_text'] == result_text}",
         )
         self.check(
             "restart_replays_nothing",
@@ -306,10 +309,8 @@ class Smoke:
 
         self.evidence.mkdir(parents=True, exist_ok=True)
         (self.evidence / "report.json").write_text(text + "\n")
-        if "saved_report" in self.data:
-            (self.evidence / "triage-report.json").write_text(
-                json.dumps(self.data["saved_report"], indent=2) + "\n"
-            )
+        if "saved_result" in self.data:
+            (self.evidence / "result.md").write_text(self.data["saved_result"].rstrip() + "\n")
         (self.evidence / "report.md").write_text(self.markdown(ok))
         print(f"\n{'all checks passed' if ok else 'CHECKS FAILED'}: {len(self.checks)} checks")
         print(f"evidence written to {self.evidence}")
@@ -323,9 +324,9 @@ class Smoke:
             f"Generated {self.data['generated_at']} by `scripts/smoke_vertical_slice.py`. "
             f"Checks passed: {passed}/{len(self.checks)}. Result: **{'pass' if ok else 'FAIL'}**.",
             "",
-            "One Run now of the seeded triage routine for the synthetic issue `DEMO-9999` "
-            "(fixture snapshot source; no Linear call), through the real service, the real "
-            "client, and the real `claude` CLI under the existing login.",
+            "One Run now of the seeded routine in its managed working folder, through the "
+            "real service, the real client, and the real `claude` CLI under the existing "
+            "login, with the routine's tools and permission mode.",
             "",
             "| Item | Value |",
             "| --- | --- |",
@@ -340,8 +341,7 @@ class Smoke:
                 f"| Run status | `{run.get('status')}` (exit {run.get('exit_code')}) |",
                 f"| Resolved model | `{run.get('resolved_model')}`; models used "
                 f"`{run.get('models_used')}` |",
-                f"| Input snapshot SHA-256 | `{run.get('input_sha256')}` |",
-                f"| Saved report SHA-256 | `{run.get('output_sha256')}` |",
+                f"| Saved result SHA-256 | `{run.get('output_sha256')}` |",
                 f"| Enqueued / started / ended | {run.get('enqueued_at')} / "
                 f"{run.get('started_at')} / {run.get('ended_at')} |",
             ]
@@ -357,15 +357,8 @@ class Smoke:
         for c in self.checks:
             detail = c["detail"].replace("|", "\\|")
             lines.append(f"| {'PASS' if c['ok'] else 'FAIL'} | `{c['name']}` | {detail} |")
-        if "saved_report" in self.data:
-            lines += [
-                "",
-                "## Saved report (`triage-report.json`)",
-                "",
-                "```json",
-                json.dumps(self.data["saved_report"], indent=2),
-                "```",
-            ]
+        if "saved_result" in self.data:
+            lines += ["", "## Saved result (`result.md`)", "", self.data["saved_result"].rstrip()]
         lines += [
             "",
             "The raw service log and run folder stay under the scratch directory; "
