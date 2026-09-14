@@ -92,10 +92,15 @@ def build_parser() -> argparse.ArgumentParser:
     routine.add_argument("routine_id")
 
     create = sub.add_parser("create-routine", help="create a paused manual routine")
-    create.add_argument("--name", required=True)
+    create.add_argument("--name", help="required unless --source names a skill folder")
     group = create.add_mutually_exclusive_group(required=True)
     group.add_argument("--prompt")
     group.add_argument("--prompt-file", type=Path)
+    group.add_argument(
+        "--source",
+        metavar="FOLDER",
+        help="a skill folder; its SKILL.md is the prompt, read again at every run",
+    )
     create.add_argument("--model", default="claude-sonnet-5")
     create.add_argument("--cwd", required=True)
     create.add_argument("--enabled", action="store_true")
@@ -158,12 +163,15 @@ def _dispatch(args: argparse.Namespace) -> Any:
     if args.command == "routine":
         return request("get_routine", {"routine_id": args.routine_id}, sock=sock)
     if args.command == "create-routine":
+        if args.name is None and args.source is None:
+            raise SystemExit("create-routine: --name is required unless --source is given")
         prompt = args.prompt
         if args.prompt_file is not None:
             prompt = args.prompt_file.read_text(encoding="utf-8")
         params = {
             "name": args.name,
             "prompt": prompt,
+            "source": args.source,
             "model": args.model,
             "cwd": args.cwd,
             "enabled": args.enabled,

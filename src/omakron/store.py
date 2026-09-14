@@ -23,7 +23,7 @@ from typing import Any
 
 from omakron.schedule import Schedule, ScheduleError
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 MAX_RESULT_TEXT_CHARS = 64 * 1024  # the run row keeps this much; stdout.jsonl keeps it all
 
 # Non-terminal statuses. Terminal ones are the runner's ``Outcome`` values.
@@ -56,6 +56,7 @@ CREATE TABLE IF NOT EXISTS routines (
     permission_mode TEXT NOT NULL DEFAULT 'bypassPermissions',
     mcp_config     TEXT,
     env_passthrough TEXT NOT NULL DEFAULT '[]',
+    source         TEXT,
     created_at     TEXT NOT NULL,
     updated_at     TEXT NOT NULL,
     deleted_at     TEXT
@@ -159,6 +160,7 @@ class Routine:
     permission_mode: str
     mcp_config: str | None
     env_passthrough: list[str]
+    source: str | None  # a skill folder whose SKILL.md is the prompt, read at launch
     created_at: str
     updated_at: str
     deleted_at: str | None
@@ -180,6 +182,7 @@ class Routine:
             "permission_mode": self.permission_mode,
             "mcp_config": self.mcp_config,
             "env_passthrough": list(self.env_passthrough),
+            "source": self.source,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "deleted_at": self.deleted_at,
@@ -199,6 +202,7 @@ class Routine:
             "permission_mode": self.permission_mode,
             "mcp_config": self.mcp_config,
             "env_passthrough": list(self.env_passthrough),
+            "source": self.source,
             "schedule_kind": self.schedule_kind,
             "cron": self.cron,
             "timezone": self.timezone,
@@ -293,6 +297,7 @@ def _routine(row: sqlite3.Row) -> Routine:
         permission_mode=row["permission_mode"],
         mcp_config=row["mcp_config"],
         env_passthrough=_json_or(row["env_passthrough"], []),
+        source=row["source"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],
         deleted_at=row["deleted_at"],
@@ -360,12 +365,12 @@ class Store:
                 "SELECT value FROM schema_meta WHERE key = 'schema_version'"
             ).fetchone()
             version = int(row["value"]) if row else None
-            if version not in (1, 2, SCHEMA_VERSION):
+            if version not in (1, 2, 3, SCHEMA_VERSION):
                 self.conn.close()
                 raise StoreError(
                     f"database schema version {version} is not {SCHEMA_VERSION}; refusing to open"
                 )
-        if version in (1, 2):
+        if version in (1, 2, 3):
             backup_path = self.path.with_name(
                 self.path.name + f".v{version}-" + uuid.uuid4().hex + ".backup"
             )
@@ -384,20 +389,26 @@ class Store:
             # Version 3: a routine chooses its tools, permission mode, MCP config,
             # and extra environment keys, and a run keeps the model's result text.
             # The report-only issue triage columns go away with the feature.
+            if version in (1, 2):
+                steps += [
+                    "ALTER TABLE routines ADD COLUMN tools TEXT NOT NULL DEFAULT 'default';",
+                    "ALTER TABLE routines ADD COLUMN permission_mode TEXT NOT NULL"
+                    " DEFAULT 'bypassPermissions';",
+                    "ALTER TABLE routines ADD COLUMN mcp_config TEXT;",
+                    "ALTER TABLE routines ADD COLUMN env_passthrough TEXT NOT NULL DEFAULT '[]';",
+                    "ALTER TABLE routines DROP COLUMN parameter_kind;",
+                    "ALTER TABLE runs ADD COLUMN result_text TEXT;",
+                    "ALTER TABLE runs DROP COLUMN parameter;",
+                    "ALTER TABLE runs DROP COLUMN input_snapshot;",
+                    "ALTER TABLE runs DROP COLUMN input_sha256;",
+                    "ALTER TABLE runs DROP COLUMN report;",
+                ]
+            # Version 4: a routine may point at a skill folder whose SKILL.md is
+            # read at every launch; the prompt column keeps the text last seen.
             steps += [
-                "ALTER TABLE routines ADD COLUMN tools TEXT NOT NULL DEFAULT 'default';",
-                "ALTER TABLE routines ADD COLUMN permission_mode TEXT NOT NULL"
-                " DEFAULT 'bypassPermissions';",
-                "ALTER TABLE routines ADD COLUMN mcp_config TEXT;",
-                "ALTER TABLE routines ADD COLUMN env_passthrough TEXT NOT NULL DEFAULT '[]';",
-                "ALTER TABLE routines DROP COLUMN parameter_kind;",
-                "ALTER TABLE runs ADD COLUMN result_text TEXT;",
-                "ALTER TABLE runs DROP COLUMN parameter;",
-                "ALTER TABLE runs DROP COLUMN input_snapshot;",
-                "ALTER TABLE runs DROP COLUMN input_sha256;",
-                "ALTER TABLE runs DROP COLUMN report;",
+                "ALTER TABLE routines ADD COLUMN source TEXT;",
                 SCHEMA,
-                "UPDATE schema_meta SET value='3' WHERE key='schema_version';",
+                "UPDATE schema_meta SET value='4' WHERE key='schema_version';",
                 "COMMIT;",
             ]
             self.conn.executescript("".join(steps))
@@ -447,6 +458,7 @@ class Store:
         permission_mode: str = "bypassPermissions",
         mcp_config: str | None = None,
         env_passthrough: list[str] | None = None,
+        source: str | None = None,
         routine_id: str | None = None,
     ) -> Routine:
         """Create a routine at revision 1. New routines start paused by default."""
@@ -469,8 +481,8 @@ class Store:
             self.conn.execute(
                 "INSERT INTO routines (id, revision, name, prompt, model, cwd, schedule_kind, cron,"
                 " timezone, enabled, policy_version, tools, permission_mode,"
-                " mcp_config, env_passthrough, created_at, updated_at)"
-                " VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)",
+                " mcp_config, env_passthrough, source, created_at, updated_at)"
+                " VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     rid,
                     name,
@@ -485,6 +497,7 @@ class Store:
                     permission_mode,
                     mcp_config,
                     json.dumps(list(env_passthrough or [])),
+                    source,
                     now,
                     now,
                 ),
@@ -508,12 +521,14 @@ class Store:
             "permission_mode",
             "mcp_config",
             "env_passthrough",
+            "source",
         )
         values = dict(draft)
         values["env_passthrough"] = json.dumps(list(draft.get("env_passthrough") or []))
         values.setdefault("tools", "default")
         values.setdefault("permission_mode", "bypassPermissions")
         values.setdefault("mcp_config", None)
+        values.setdefault("source", None)
         with self._tx():
             current = self.get_routine(routine_id)
             if current.deleted_at or current.revision != expected_revision:
@@ -716,6 +731,26 @@ class Store:
             )
             if cur.rowcount != 1:
                 raise StoreError(f"run {run_id} is not claimed")
+
+    def set_snapshot_prompt(self, run_id: str, prompt: str, *, source_sha256: str) -> None:
+        """Record the prompt text actually sent for a claimed run of a skill-folder routine.
+
+        The snapshot was taken when the run was queued; the file is read again
+        at launch, so the record must say what went to the model.
+        """
+        with self._tx():
+            row = self.conn.execute(
+                "SELECT routine_snapshot FROM runs WHERE id = ? AND status = ?", (run_id, CLAIMED)
+            ).fetchone()
+            if row is None:
+                raise StoreError(f"run {run_id} is not claimed")
+            snapshot = json.loads(row["routine_snapshot"])
+            snapshot["prompt"] = prompt
+            snapshot["source_sha256"] = source_sha256
+            self.conn.execute(
+                "UPDATE runs SET routine_snapshot = ? WHERE id = ?",
+                (json.dumps(snapshot, sort_keys=True), run_id),
+            )
 
     def finish_run(
         self,

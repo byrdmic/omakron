@@ -107,3 +107,61 @@ def test_raw_client_keeps_prompt_data_out_of_shell(service):
     result = service.client("request", stdin=json.dumps(request))
     assert result.returncode == 0, result.stdout + result.stderr
     assert json.loads(result.stdout)["routine"]["prompt"] == request["params"]["prompt"]
+
+
+SKILL_TEXT = """---
+name: folder-notes
+description: Write a note about the working folder.
+---
+
+Describe the working folder in one paragraph and reply with it.
+"""
+
+
+def skill_folder(tmp_path, text=SKILL_TEXT):
+    folder = tmp_path / "skills" / "folder-notes"
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "SKILL.md").write_text(text, encoding="utf-8")
+    return folder
+
+
+def test_create_from_a_skill_folder_takes_name_and_prompt_from_skill_md(service, tmp_path):
+    folder = skill_folder(tmp_path)
+    params = dict(draft(service), name="", prompt="", source=str(folder))
+    saved = service.request("create_routine", params)["routine"]
+    assert saved["source"] == str(folder)
+    assert saved["name"] == "folder-notes"
+    assert saved["prompt"] == "Describe the working folder in one paragraph and reply with it."
+    named = service.request("create_routine", dict(params, name="My notes", prompt="ignored text"))[
+        "routine"
+    ]
+    assert named["name"] == "My notes" and named["prompt"] == saved["prompt"]
+    service.restart()
+    again = service.request("get_routine", {"routine_id": saved["id"]})["routine"]
+    assert again["source"] == str(folder) and again["prompt"] == saved["prompt"]
+
+
+def test_read_skill_previews_a_folder_and_refuses_a_bad_one(service, tmp_path):
+    folder = skill_folder(tmp_path)
+    shown = service.request("read_skill", {"source": str(folder)})
+    assert shown["name"] == "folder-notes"
+    assert shown["description"] == "Write a note about the working folder."
+    assert shown["prompt"].startswith("Describe the working folder")
+    assert shown["file"] == str(folder / "SKILL.md")
+    with pytest.raises(ServiceError) as error:
+        service.request("read_skill", {"source": str(tmp_path)})
+    assert error.value.code == "bad_request" and "no SKILL.md" in str(error.value)
+    with pytest.raises(ServiceError):
+        service.request("create_routine", dict(draft(service), source=str(tmp_path / "gone")))
+
+
+def test_editor_defaults_list_the_skills_under_the_configured_roots(service_factory, tmp_path):
+    skill_folder(tmp_path)
+    other = tmp_path / "skills" / "other"
+    other.mkdir()
+    (other / "SKILL.md").write_text("Plain body.\n", encoding="utf-8")
+    svc = service_factory("roots", settings={"skill_roots": [str(tmp_path / "skills")]})
+    defaults = svc.request("editor_defaults")
+    assert defaults["skill_roots"] == [str(tmp_path / "skills")]
+    assert [s["name"] for s in defaults["skills"]] == ["folder-notes", "other"]
+    assert defaults["skills"][0]["source"] == str(tmp_path / "skills" / "folder-notes")

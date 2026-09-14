@@ -73,7 +73,8 @@ Each module has a docstring stating its contract. Read that first.
 - `store.py` is SQLite under `$XDG_STATE_HOME/omakron`. Runs are claimed in one `BEGIN IMMEDIATE` transaction, carry an immutable routine revision, and reach a terminal status only after output is durably written.
 - `worker.py` executes one run in a fixed order: claim, launch, record, store. The prompt goes to the CLI on stdin.
 - `runner.py` builds the Claude invocation from the routine's tools, permission mode, MCP config, and environment keys, supervises the process with a deadline and bounded output, and records the outcome. A run succeeds on exit status zero and a result event without an error. Tool use is never a failure.
-- `routines.py` validates a routine draft, including the execution choices.
+- `routines.py` validates a routine draft, including the execution choices. A draft with a `source` folder takes its prompt and default name from that folder's SKILL.md.
+- `skills.py` parses SKILL.md front matter and body and lists skill folders under the configured roots. The worker reads the file again at every launch and records the text it sent.
 - `seed.py` defines the routine an empty database starts with: tools on, manual, paused.
 - `schedule.py` and `scheduler.py` share one cron evaluator for previews and dispatch. Missed occurrences beyond 60 seconds are skipped, same-routine overlap is prevented, and queued work expires after five minutes.
 - `history.py` builds run summaries and details and handles retention cleanup.

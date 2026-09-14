@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from omakron import history
+from omakron import history, skills
 from omakron.runner import (
     STOP_CANCEL,
     STOP_SHUTDOWN,
@@ -108,6 +108,16 @@ class Worker:
             return
 
         routine = run.routine_snapshot
+        prompt = routine["prompt"]
+        if routine.get("source"):
+            # The skill file is the prompt. Read it now and record what was sent.
+            try:
+                skill = skills.load(routine["source"])
+            except skills.SkillError as exc:
+                self._fail(run, [str(exc)], output_dir=str(out_dir))
+                return
+            prompt = skill.prompt
+            self.store.set_snapshot_prompt(run.id, prompt, source_sha256=skill.sha256)
         try:
             argv = claude_argv(
                 routine["model"],
@@ -123,7 +133,7 @@ class Worker:
             argv=argv,
             cwd=cwd,
             env=child_env(extra=routine.get("env_passthrough") or []),
-            stdin_text=routine["prompt"],  # the prompt is stdin, never argv
+            stdin_text=prompt,  # the prompt is stdin, never argv
             deadline_s=run.deadline_s,
         )
 

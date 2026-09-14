@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from omakron import skills
 from omakron.runner import (
     DEFAULT_MODEL,
     DEFAULT_PERMISSION_MODE,
@@ -29,12 +30,23 @@ FIELDS = (
     "permission_mode",
     "mcp_config",
     "env_passthrough",
+    "source",
 )
 MAX_TOOLS_CHARS = 2000
 
 
 def validate(draft: dict[str, Any], managed_workdir: Path) -> dict[str, Any]:
+    """Accept a draft. With a ``source`` folder, SKILL.md supplies the prompt and a name."""
     name, prompt = draft.get("name"), draft.get("prompt")
+    source = draft.get("source") or None
+    if source is not None:
+        try:
+            skill = skills.load(source)
+        except skills.SkillError as exc:
+            raise ValueError(str(exc)) from exc
+        source, prompt = skill.source, skill.prompt
+        if not isinstance(name, str) or not name.strip():
+            name = skill.name
     if not isinstance(name, str) or not name.strip() or len(name) > 120:
         raise ValueError("name must be 1-120 characters")
     if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 20_000:
@@ -75,6 +87,7 @@ def validate(draft: dict[str, Any], managed_workdir: Path) -> dict[str, Any]:
         schedule_kind=kind,
         cron=cron,
         timezone=zone,
+        source=source,
         **execution,
     )
 

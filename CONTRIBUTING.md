@@ -8,6 +8,25 @@ Describe the problem and expected behavior before changing code.
 Use a branch for each change and include verification in the pull request.
 Installation on a desktop is a separate operation from merging source changes.
 
+## Branches
+
+`master` is the only long-lived branch and is always the installable state of
+the plugin. It is protected: changes land by pull request after the CI check
+passes, and the branch must be current with `master` before merging.
+
+Start one short-lived branch per change, named for its intent, such as
+`fix/scheduler-overlap` or `feat/run-details`. Keep the branch small enough
+that CI is the review, and split a branch that lives more than a few days.
+Land refactors and behavior changes in separate pull requests so a later
+bisect stays meaningful.
+
+Pull requests are squash-merged, and the branch is deleted on merge. There is
+no development branch and no release branch.
+
+Releases are annotated tags on `master` that match the version in
+`manifest.json`. Bump the version in the pull request that finishes the work
+and tag after it merges.
+
 ## Repository layout
 
 The repository root is the plugin folder. Its manifest and QML live in

@@ -278,6 +278,8 @@ def verify_editor_flow(ipc, key, capture, *, env, scratch, out, processes):
     ipc("test", "focus", "newRoutine")
     key("Return")
     wait_until(lambda: state()["editing"])
+    ipc("test", "focus", "writeOwn")
+    key("Return")
     ipc("test", "set", "field_name", "Keyboard schedule")
     ipc("test", "set", "field_prompt", "A literal report prompt with $ and quotes.")
     ipc("test", "editor", "Weekdays")
@@ -299,6 +301,8 @@ def verify_editor_flow(ipc, key, capture, *, env, scratch, out, processes):
     ipc("test", "focus", "newRoutine")
     key("Return")
     wait_until(lambda: state()["editing"])
+    ipc("test", "focus", "writeOwn")
+    key("Return")
     ipc("test", "set", "field_name", "Discard this draft")
     key("Escape")
     assert not state()["editing"] and len(state()["routines"]) == 2

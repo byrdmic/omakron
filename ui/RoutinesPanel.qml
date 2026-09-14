@@ -44,8 +44,10 @@ Panel {
     editing = true
   }
   function scheduleText(routine) {
-    if (routine.schedule_kind === "manual") return "Runs when you ask"
-    return routine.cron + " · " + routine.timezone
+    var when = routine.schedule_kind === "manual" ? "Runs when you ask" : routine.cron + " · " + routine.timezone
+    if (!routine.source) return when
+    var parts = routine.source.split("/")
+    return when + " · SKILL.md in " + parts[parts.length - 1]
   }
   onOpenedChanged: if (opened) refresh()
 

@@ -30,7 +30,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from omakron import __version__, history, ipc, manage, routines, seed
+from omakron import __version__, history, ipc, manage, routines, seed, skills
 from omakron.client import socket_path
 from omakron.runner import (
     DEFAULT_MODEL,
@@ -58,6 +58,7 @@ class Settings:
     claude_executable: str = "claude"
     deadline_s: float = DEFAULT_DEADLINE_S
     enforce_compatibility: bool = False
+    skill_roots: tuple[str, ...] = skills.DEFAULT_ROOTS  # folders the editor lists skills from
 
     @classmethod
     def load(cls, directory: Path) -> Settings:
@@ -73,10 +74,14 @@ class Settings:
             raise ValueError("claude_executable must be a non-empty string")
         if isinstance(deadline, bool) or not isinstance(deadline, int | float) or deadline <= 0:
             raise ValueError("deadline_s must be a positive number")
+        roots = obj.get("skill_roots", list(skills.DEFAULT_ROOTS))
+        if not isinstance(roots, list) or not all(isinstance(r, str) and r for r in roots):
+            raise ValueError("skill_roots must be a list of folder paths")
         return cls(
             claude_executable=executable,
             deadline_s=float(deadline),
             enforce_compatibility=obj.get("enforce_compatibility", False) is True,
+            skill_roots=tuple(roots),
         )
 
 
@@ -367,8 +372,24 @@ class Service(history.HistoryApi):
             ],
         }
 
+    def op_read_skill(self, params: dict[str, Any]) -> dict[str, Any]:
+        """What the editor shows once a skill folder is chosen: name, description, prompt."""
+        try:
+            skill = skills.load(params.get("source"))
+        except skills.SkillError as exc:
+            raise ApiError("bad_request", str(exc)) from exc
+        return {
+            "source": skill.source,
+            "file": skill.file,
+            "name": skill.name,
+            "description": skill.description,
+            "prompt": skill.prompt,
+        }
+
     def op_editor_defaults(self, params: dict[str, Any]) -> dict[str, Any]:
         return {
+            "skills": skills.discover(self.settings.skill_roots),
+            "skill_roots": [str(Path(r).expanduser()) for r in self.settings.skill_roots],
             "cwd": str(self.workdir / "routines"),
             "model": DEFAULT_MODEL,
             "timezone": "UTC",
