@@ -29,6 +29,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from omakron import __version__, history, ipc, manage, routines, seed, skills
 from omakron.client import socket_path
@@ -58,7 +59,6 @@ class Settings:
     claude_executable: str = "claude"
     deadline_s: float = DEFAULT_DEADLINE_S
     enforce_compatibility: bool = False
-    skill_roots: tuple[str, ...] = skills.DEFAULT_ROOTS  # folders the editor lists skills from
 
     @classmethod
     def load(cls, directory: Path) -> Settings:
@@ -74,14 +74,10 @@ class Settings:
             raise ValueError("claude_executable must be a non-empty string")
         if isinstance(deadline, bool) or not isinstance(deadline, int | float) or deadline <= 0:
             raise ValueError("deadline_s must be a positive number")
-        roots = obj.get("skill_roots", list(skills.DEFAULT_ROOTS))
-        if not isinstance(roots, list) or not all(isinstance(r, str) and r for r in roots):
-            raise ValueError("skill_roots must be a list of folder paths")
         return cls(
             claude_executable=executable,
             deadline_s=float(deadline),
             enforce_compatibility=obj.get("enforce_compatibility", False) is True,
-            skill_roots=tuple(roots),
         )
 
 
@@ -388,11 +384,9 @@ class Service(history.HistoryApi):
 
     def op_editor_defaults(self, params: dict[str, Any]) -> dict[str, Any]:
         return {
-            "skills": skills.discover(self.settings.skill_roots),
-            "skill_roots": [str(Path(r).expanduser()) for r in self.settings.skill_roots],
             "cwd": str(self.workdir / "routines"),
             "model": DEFAULT_MODEL,
-            "timezone": "UTC",
+            "timezone": local_timezone(),
             "tools": DEFAULT_TOOLS,
             "permission_mode": DEFAULT_PERMISSION_MODE,
             "permission_modes": list(PERMISSION_MODES),
@@ -487,6 +481,25 @@ class Service(history.HistoryApi):
             raise ApiError("conflict", str(exc)) from exc
         self.wake.set()
         return {"run": run.to_dict()}
+
+
+def local_timezone(env: dict[str, str] | None = None) -> str:
+    """The machine's zone name for new routines: ``TZ`` if set, else ``/etc/localtime``."""
+    src = os.environ if env is None else env
+    candidates = [src.get("TZ", "")]
+    try:
+        target = os.path.realpath("/etc/localtime")
+        candidates.append(target.split("/zoneinfo/", 1)[1] if "/zoneinfo/" in target else "")
+    except OSError:
+        pass
+    for name in candidates:
+        if name and not name.startswith(":"):
+            try:
+                ZoneInfo(name)
+            except ZoneInfoNotFoundError, ValueError:
+                continue
+            return name
+    return "UTC"
 
 
 def _gone_within(pid: int, seconds: float) -> bool:

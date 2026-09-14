@@ -1,15 +1,17 @@
 """Routines that point at a skill folder instead of carrying their own prompt.
 
-A skill folder holds a ``SKILL.md``: a short YAML front matter with ``name``
-and ``description``, then the prompt as Markdown. The user keeps these folders
-in a repository shared between machines, so the file is the prompt's source of
-truth. A routine created from one stores the folder path, and the worker reads
-the file again at every launch. The run record keeps the text that was sent.
+A skill file is a ``SKILL.md``: a short YAML front matter with ``name`` and
+``description``, then the prompt as Markdown. The user keeps these files in a
+repository shared between machines, so the file is the prompt's source of
+truth. A routine imported from one stores the file's location, and the worker
+reads the file again at every launch. The run record keeps the text that was
+sent. The location may also name the folder that holds the file.
 
 Only ``name`` and ``description`` are read from the front matter. Anything
 else is left to the file. There is no YAML dependency; the parser understands
 plain scalars, quoted scalars, and the ``>`` and ``|`` block forms, which is
 what these files use.
+
 """
 
 from __future__ import annotations
@@ -21,18 +23,16 @@ from pathlib import Path
 
 SKILL_FILENAMES = ("SKILL.md", "skill.md")
 MAX_PROMPT_CHARS = 20_000
-MAX_DISCOVERED = 200
-DEFAULT_ROOTS = ("~/.claude/scheduled-tasks", "~/.claude/skills")
 
 
 class SkillError(ValueError):
-    """The folder is not a usable skill: missing, unreadable, or empty."""
+    """The location is not a usable skill: missing, unreadable, or empty."""
 
 
 @dataclass(frozen=True, slots=True)
 class Skill:
-    source: str  # the folder, absolute and resolved
-    file: str  # the SKILL.md inside it
+    source: str  # what the routine stores: the file, or the folder holding it, resolved
+    file: str  # the SKILL.md itself
     name: str
     description: str
     prompt: str  # the body after the front matter, stripped
@@ -48,24 +48,28 @@ def skill_file(folder: Path) -> Path | None:
 
 
 def resolve_source(value: object) -> Path:
-    """An absolute existing folder. Symlinks are followed so the stored path is stable."""
+    """An absolute existing file or folder. Symlinks are followed so the stored path is stable."""
     if not isinstance(value, str) or not value or any(c in value for c in ("\n", "\r", "\0")):
-        raise SkillError("skill folder must be an absolute path")
-    folder = Path(value).expanduser()
-    if not folder.is_absolute():
-        raise SkillError("skill folder must be an absolute path")
-    folder = Path(os.path.realpath(folder))
-    if not folder.is_dir():
-        raise SkillError(f"skill folder does not exist: {folder}")
-    return folder
+        raise SkillError("skill file must be an absolute path")
+    location = Path(value).expanduser()
+    if not location.is_absolute():
+        raise SkillError("skill file must be an absolute path")
+    location = Path(os.path.realpath(location))
+    if not location.exists():
+        raise SkillError(f"skill file does not exist: {location}")
+    return location
 
 
 def load(value: object) -> Skill:
-    """Read the skill in ``value``. Raises :class:`SkillError` with a plain reason."""
-    folder = resolve_source(value)
-    path = skill_file(folder)
-    if path is None:
-        raise SkillError(f"no SKILL.md in {folder}")
+    """Read the skill at ``value``. Raises :class:`SkillError` with a plain reason."""
+    location = resolve_source(value)
+    if location.is_dir():
+        path = skill_file(location)
+        if path is None:
+            raise SkillError(f"no SKILL.md in {location}")
+    else:
+        path = location
+    folder = path.parent
     try:
         raw = path.read_bytes()
     except OSError as exc:
@@ -79,7 +83,7 @@ def load(value: object) -> Skill:
         raise SkillError(f"SKILL.md is longer than {MAX_PROMPT_CHARS} characters: {path}")
     name = meta.get("name", "").strip() or folder.name
     return Skill(
-        source=str(folder),
+        source=str(location),
         file=str(path),
         name=name[:120],
         description=meta.get("description", "").strip(),
@@ -137,39 +141,3 @@ def _parse_fields(lines: list[str]) -> dict[str, str]:
             parts = [value]
     flush()
     return fields
-
-
-def discover(roots: list[str] | tuple[str, ...]) -> list[dict[str, str]]:
-    """Skill folders directly under each root, for the editor's picker.
-
-    A root that does not exist is skipped. Folders whose SKILL.md cannot be
-    read are listed with the problem as their description, so the person sees
-    them and knows why they will not work.
-    """
-    found: list[dict[str, str]] = []
-    seen: set[str] = set()
-    for root in roots:
-        base = Path(root).expanduser()
-        if not base.is_dir():
-            continue
-        try:
-            children = sorted(p for p in base.iterdir() if p.is_dir())
-        except OSError:
-            continue
-        for child in children:
-            if skill_file(child) is None:
-                continue
-            resolved = os.path.realpath(child)
-            if resolved in seen:
-                continue
-            seen.add(resolved)
-            try:
-                skill = load(resolved)
-                entry = {"source": resolved, "name": skill.name, "description": skill.description}
-            except SkillError as exc:
-                entry = {"source": resolved, "name": child.name, "description": str(exc)}
-            entry["root"] = str(base)
-            found.append(entry)
-            if len(found) >= MAX_DISCOVERED:
-                return found
-    return found

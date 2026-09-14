@@ -3,15 +3,17 @@ import QtQuick.Controls as Controls
 import Quickshell.Io
 import qs.Commons
 import qs.Ui
+import "ScheduleText.js" as ScheduleText
 
 // Creates one routine, one decision at a time. First: write your own, or
-// load a skill folder. Loading shows a picker that fills a path field the
-// user can also type into; once the SKILL.md is read, the form opens with the
-// name and prompt filled in, and the service reads that file again at every
-// run. The form itself is name, prompt, and schedule; the working folder,
-// model, tools, and permission mode are prefilled from the service and stay
-// folded away unless asked for. The next run times appear on their own as the
-// schedule changes, so there is nothing to press before saving.
+// import a prompt from a skill file. Importing asks for the SKILL.md, chosen
+// with Omarchy's file chooser or typed; once it is read, the form opens with
+// the name and description filled in and the prompt tucked behind a toggle,
+// and the service reads that file again at every run. The schedule is a
+// segmented choice with 12-hour times, so nobody has to write cron by hand;
+// the raw expression stays available under "Custom repeat". The next run
+// times appear on their own as the schedule changes, so there is nothing to
+// press before saving.
 Column {
   id: root
   objectName: "routineEditor"
@@ -22,10 +24,16 @@ Column {
   property string error: ""
   property string previewText: ""
   property string previewKey: ""
-  property string mode: "Daily"
+  property string step: "choose"  // choose, pick, edit
+  property string mode: "Daily"  // Hourly, Daily, Weekly, Custom time, Custom repeat
+  property int hour12: 9
+  property string minute: "00"
+  property string meridiem: "AM"
+  property string weekday: "1"
+  property var days: ["1", "2", "3", "4", "5"]
   property string permissionMode: ""
   property bool showMore: false
-  property string step: "choose"  // choose, pick, edit
+  property bool showPrompt: false
   property string source: ""
   property string skillFile: ""
   property string skillDescription: ""
@@ -35,27 +43,27 @@ Column {
   property bool nameFromSkill: false
   readonly property bool sourced: source !== ""
   readonly property bool skillReady: sourced && skillFile !== ""
-  readonly property var skillOptions: (root.defaults.skills || []).map(function(s) { return {value: s.source, label: s.name, description: s.description} })
+  readonly property bool timed: mode === "Daily" || mode === "Weekly" || mode === "Custom time"
   readonly property color dim: Qt.darker(Color.foreground, 1.4)
-  readonly property bool timed: mode === "Daily" || mode === "Weekdays" || mode === "Weekly"
   signal revealRequested(var item)
+  signal reopenRequested()  // the popup closed while a chooser window had focus
   signal saved(var routine)
   signal canceled()
 
   onErrorChanged: if (error !== "") Qt.callLater(function() { root.revealRequested(saveButton) })
 
+  function hour24() { return (hour12 % 12) + (meridiem === "PM" ? 12 : 0) }
   function cronExpression() {
-    if (mode === "Manual") return null
-    if (mode === "Advanced") return advanced.text
-    var pieces = time.text.split(":")
-    var hour = Number(pieces[0]), minute = Number(pieces[1])
-    if (!/^\d\d:\d\d$/.test(time.text) || hour > 23 || minute > 59) return "invalid time"
-    return minute + " " + hour + " * * " + (mode === "Weekdays" ? "1-5" : mode === "Weekly" ? weekday.value : "*")
+    var at = Number(minute) + " " + hour24()
+    if (mode === "Hourly") return "0 * * * *"
+    if (mode === "Daily") return at + " * * *"
+    if (mode === "Weekly") return at + " * * " + weekday
+    if (mode === "Custom time") return days.length === 0 ? "no days" : at + " * * " + days.slice().sort().join(",")
+    return advanced.text
   }
   function draft() {
     return {name: name.text, prompt: prompt.text, source: root.source || null, model: model.text, cwd: folder.text,
-      schedule_kind: mode === "Manual" ? "manual" : "cron", cron: cronExpression(),
-      timezone: mode === "Manual" ? null : timezone.text,
+      schedule_kind: "cron", cron: cronExpression(), timezone: timezone.text,
       tools: tools.text, permission_mode: permissionMode || root.defaults.permission_mode || "bypassPermissions",
       mcp_config: null, env_passthrough: []}
   }
@@ -65,8 +73,7 @@ Column {
   }
   function preview() {
     previewTimer.stop()
-    if (mode === "Manual") { previewText = "Runs only when you ask."; return }
-    if (cronExpression() === "invalid time") { previewText = "Enter the time as HH:MM, for example 09:00."; return }
+    if (cronExpression() === "no days") { previewText = "Pick at least one day."; return }
     var params = {cron: cronExpression(), timezone: timezone.text}
     if (client.busy) { previewTimer.restart(); return }
     if (client.request("preview_schedule", params)) {
@@ -75,14 +82,13 @@ Column {
     }
   }
   function save() {
-    if (cronExpression() === "invalid time") { error = "Enter the time as HH:MM, for example 09:00."; return }
+    if (cronExpression() === "no days") { error = "Pick at least one day."; return }
     error = ""
     client.request("create_routine", draft())
   }
   function setSource(path) {
     if (path === root.source) return
     root.source = path
-    if (sourceField.text !== path) sourceField.text = path
     skillTimer.restart()
   }
   function readSkill() {
@@ -97,23 +103,25 @@ Column {
     var params = {source: root.source}
     if (client.request("read_skill", params)) {
       root.skillKey = JSON.stringify(params)
-      root.skillNote = "Reading SKILL.md..."
+      root.skillNote = "Reading the skill file..."
     }
   }
   function fill(field, text) { root.filling = true; field.text = text; root.filling = false }
+  function toggleDay(day) {
+    var next = days.slice()
+    var at = next.indexOf(day)
+    if (at >= 0) next.splice(at, 1); else next.push(day)
+    days = next
+    scheduleChanged()
+  }
   function writeOwn() { root.setSource(""); root.step = "edit"; Qt.callLater(root.focusFirst) }
-  function loadSkill() { root.step = "pick"; Qt.callLater(root.focusFirst) }
+  function importSkill() { root.step = "pick"; Qt.callLater(root.focusFirst) }
   function useSkill() { if (root.skillReady) { root.step = "edit"; Qt.callLater(root.focusFirst) } }
   function back() { root.step = "choose"; root.error = ""; Qt.callLater(root.focusFirst) }
   function focusFirst() {
     if (step === "choose") writeButton.forceActiveFocus()
     else if (step === "pick") sourceField.forceActiveFocus()
     else name.forceActiveFocus()
-  }
-  function localTime(iso) {
-    // 2026-09-14T09:00:00-04:00 -> Mon 14 Sep 09:00
-    var d = new Date(iso.slice(0, 19))
-    return isNaN(d) ? iso : Qt.formatDateTime(d, "ddd d MMM HH:mm")
   }
 
   Timer { id: previewTimer; interval: 400; onTriggered: root.preview() }
@@ -122,11 +130,12 @@ Column {
 
   Connections {
     target: root.client
+    // Replies are handled even while the popup is closed: a chooser window
+    // takes focus and closes it, and the editor state outlives that.
     function onResult(op, params, data) {
-      if (!root.visible) return
       if (op === "preview_schedule" && JSON.stringify(params) === root.previewKey) {
         if (params.cron !== root.cronExpression() || params.timezone !== timezone.text) { root.scheduleChanged(); return }
-        root.previewText = "Next runs · " + data.timezone + "\n" + data.occurrences.map(function(t) { return root.localTime(t.local) }).join("\n")
+        root.previewText = "Next runs · " + data.timezone + "\n" + data.occurrences.map(function(t) { return ScheduleText.localMoment(t.local) }).join("\n")
       } else if (op === "read_skill" && JSON.stringify(params) === root.skillKey) {
         if (params.source !== root.source) { root.readSkill(); return }
         root.skillFile = data.file
@@ -137,10 +146,22 @@ Column {
       } else if (op === "create_routine") root.saved(data.routine)
     }
     function onFailure(op, code, message) {
-      if (!root.visible) return
       if (op === "preview_schedule") root.previewText = message
       else if (op === "read_skill") { root.skillFile = ""; root.skillDescription = ""; root.skillNote = message; root.fill(prompt, "") }
       else root.error = message
+    }
+  }
+
+  // Omarchy's desktop file chooser. It prints the chosen path, or nothing.
+  Process {
+    id: chooser
+    command: ["omarchy-file-select", "--title", "Skill file", "--extensions", "md"]
+    stdout: StdioCollector { id: chosen; waitForEnd: true }
+    onExited: function(code) {
+      var path = chosen.text.trim()
+      if (code === 0 && path !== "") sourceField.text = path
+      root.reopenRequested()
+      Qt.callLater(function() { sourceField.forceActiveFocus() })
     }
   }
 
@@ -156,8 +177,8 @@ Column {
     }
     Caption {
       text: root.step === "choose" ? "A routine is a prompt Claude Code runs on a schedule."
-          : root.step === "pick" ? "Pick a skill folder, or type its path."
-          : root.sourced ? "From " + root.skillFile : "Write your own."
+          : root.step === "pick" ? "Choose the SKILL.md to import the prompt from."
+          : root.sourced ? "Imported from " + root.skillFile : "Write your own."
     }
   }
 
@@ -180,20 +201,19 @@ Column {
       onClicked: root.writeOwn()
     }
     Button {
-      objectName: "loadSkill"
+      objectName: "importSkill"
       width: parent.width
-      text: "Load a skill folder"
-      iconText: "󰉋"
+      text: "Import a prompt from a skill file"
+      iconText: "󰈔"
       focusable: true
       bordered: true
       leftAlign: true
-      onClicked: root.loadSkill()
+      onClicked: root.importSkill()
     }
-    Caption { text: "A skill folder holds a SKILL.md. Omakron reads it at every run, so editing the file changes the routine." }
+    Caption { text: "A skill file is a SKILL.md. Omakron reads it at every run, so editing the file changes the routine." }
   }
 
-  // Step two: the skill folder. The field shows the chosen folder; the icon
-  // opens Omarchy's folder chooser, and the skill list below fills the field.
+  // Step two: the skill file. The icon opens Omarchy's file chooser; the path can also be typed.
   Column {
     visible: root.step === "pick"
     width: parent.width
@@ -201,7 +221,7 @@ Column {
     Column {
       width: parent.width
       spacing: Style.spacing.labelGap
-      FieldLabel { text: "Skill folder" }
+      FieldLabel { text: "Skill file" }
       Row {
         width: parent.width
         spacing: Style.space(6)
@@ -209,17 +229,17 @@ Column {
           id: sourceField
           objectName: "field_source"
           width: parent.width - browseButton.width - parent.spacing
-          placeholderText: (root.defaults.skill_roots || [])[0] || "/path/to/a/folder/with/SKILL.md"
-          Accessible.name: "Skill folder path"
+          placeholderText: "/path/to/skill/SKILL.md"
+          Accessible.name: "Skill file path"
           onActiveFocusChanged: if (activeFocus) root.revealRequested(sourceField)
-          onTextChanged: root.setSource(text)
+          onTextChanged: root.setSource(text.trim())
           Keys.onReturnPressed: root.useSkill()
         }
         Button {
           id: browseButton
           objectName: "browseSkill"
-          iconText: "󰉋"
-          tooltipText: "Choose a folder"
+          iconText: "󰈔"
+          tooltipText: "Choose a file"
           focusable: true
           bordered: true
           enabled: !chooser.running
@@ -227,32 +247,25 @@ Column {
         }
       }
     }
-    SearchableDropdown {
-      id: skillPicker
-      objectName: "field_skill"
+    Column {
+      visible: root.skillReady || root.skillNote !== ""
       width: parent.width
-      label: "Skill"
-      value: root.source
-      options: root.skillOptions
-      placeholderText: "Search skills"
-      emptyText: "No skill folder by that name"
-      onChanged: function(value) { root.setSource(value) }
-    }
-    Caption {
-      visible: text !== ""
-      text: root.skillNote !== "" ? root.skillNote : root.skillDescription
-      color: root.skillNote !== "" && root.skillNote !== "Reading SKILL.md..." ? Color.urgent : root.dim
-    }
-  }
-
-  // Omarchy's desktop folder chooser. It prints the chosen path, or nothing.
-  Process {
-    id: chooser
-    command: ["omarchy-file-select", "--directory", "--title", "Skill folder"]
-    stdout: StdioCollector { id: chosen; waitForEnd: true }
-    onExited: function(code) {
-      var path = chosen.text.trim()
-      if (code === 0 && path !== "") { root.setSource(path); sourceField.forceActiveFocus() }
+      spacing: Style.space(2)
+      Text {
+        visible: root.skillReady
+        width: parent.width
+        text: name.text
+        elide: Text.ElideRight
+        textFormat: Text.PlainText
+        color: Color.foreground
+        font.family: Style.font.family
+        font.pixelSize: Style.font.body
+      }
+      Caption {
+        visible: text !== ""
+        text: root.skillNote !== "" ? root.skillNote : root.skillDescription
+        color: root.skillNote !== "" && root.skillNote !== "Reading the skill file..." ? Color.urgent : root.dim
+      }
     }
   }
 
@@ -274,16 +287,28 @@ Column {
         onActiveFocusChanged: if (activeFocus) root.revealRequested(name)
         onTextChanged: if (!root.filling) root.nameFromSkill = false
       }
+      Caption { visible: root.sourced && root.skillDescription !== ""; text: root.skillDescription }
     }
 
+    Button {
+      visible: root.sourced
+      objectName: "togglePrompt"
+      text: root.showPrompt ? "Hide the prompt" : "Show the prompt"
+      iconText: root.showPrompt ? "󰅃" : "󰅀"
+      fontSize: Style.font.bodySmall
+      focusable: true
+      horizontalPadding: 0
+      onClicked: root.showPrompt = !root.showPrompt
+    }
     Column {
+      visible: !root.sourced || root.showPrompt
       width: parent.width
       spacing: Style.spacing.labelGap
-      FieldLabel { text: "Prompt" }
+      FieldLabel { visible: !root.sourced; text: "Prompt" }
       BorderSurface {
         id: promptFrame
         width: parent.width
-        height: Style.space(120)
+        height: Style.space(root.sourced ? 180 : 120)
         radius: Style.cornerRadius
         readonly property var spec: Border.controlSpec(prompt.activeFocus ? "focus" : (promptHover.hovered ? "hover-cursor" : "normal"), Color.foreground, Color.accent)
         color: Style.controlFill(prompt.activeFocus, promptHover.hovered, Color.foreground, Color.accent)
@@ -322,151 +347,195 @@ Column {
           }
         }
       }
-      Caption { visible: root.sourced; text: "Read from the skill folder at every run. Edit SKILL.md to change it." }
+      Caption { visible: root.sourced; text: "Read from the skill file at every run. Edit the file to change it." }
     }
-  }
 
-  Dropdown {
-    id: schedule
-    visible: root.step === "edit"
-    width: parent.width
-    label: "Schedule"
-    value: root.mode
-    options: ["Daily", "Weekdays", "Weekly", "Manual", "Advanced"]
-    onChanged: function(value) { root.mode = value; root.scheduleChanged() }
-  }
-
-  Row {
-    visible: root.step === "edit" && root.timed
-    width: parent.width
-    spacing: Style.space(10)
     Column {
+      width: parent.width
+      spacing: Style.spacing.labelGap
+      FieldLabel { text: "Schedule" }
+      ButtonGroup {
+        id: schedule
+        objectName: "field_schedule"
+        width: parent.width
+        value: root.mode
+        options: ["Hourly", "Daily", "Weekly", "Custom time", "Custom repeat"]
+        onChanged: function(value) { root.mode = value; root.scheduleChanged() }
+      }
+    }
+
+    Caption { visible: root.mode === "Hourly"; text: "Every hour, on the hour." }
+
+    Dropdown {
+      id: weekdayPicker
+      visible: root.mode === "Weekly"
+      width: parent.width
+      label: "Day"
+      value: root.weekday
+      options: [{value:"1",label:"Monday"},{value:"2",label:"Tuesday"},{value:"3",label:"Wednesday"},{value:"4",label:"Thursday"},{value:"5",label:"Friday"},{value:"6",label:"Saturday"},{value:"0",label:"Sunday"}]
+      onChanged: function(value) { root.weekday = value; root.scheduleChanged() }
+    }
+
+    Column {
+      visible: root.mode === "Custom time"
+      width: parent.width
+      spacing: Style.spacing.labelGap
+      FieldLabel { text: "Days" }
+      Row {
+        spacing: Style.space(4)
+        Repeater {
+          model: [{value:"1",label:"Mon"},{value:"2",label:"Tue"},{value:"3",label:"Wed"},{value:"4",label:"Thu"},{value:"5",label:"Fri"},{value:"6",label:"Sat"},{value:"0",label:"Sun"}]
+          Button {
+            required property var modelData
+            text: modelData.label
+            fontSize: Style.font.bodySmall
+            focusable: true
+            bordered: true
+            selected: root.days.indexOf(modelData.value) >= 0
+            onClicked: root.toggleDay(modelData.value)
+          }
+        }
+      }
+    }
+
+    Column {
+      visible: root.timed
+      width: parent.width
       spacing: Style.spacing.labelGap
       FieldLabel { text: "Time" }
+      Row {
+        spacing: Style.space(6)
+        Dropdown {
+          id: hourPicker
+          objectName: "field_hour"
+          width: Style.space(72)
+          showLabel: false
+          value: String(root.hour12)
+          options: ["12", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11"]
+          onChanged: function(value) { root.hour12 = Number(value); root.scheduleChanged() }
+        }
+        Dropdown {
+          id: minutePicker
+          objectName: "field_minute"
+          width: Style.space(72)
+          showLabel: false
+          value: root.minute
+          options: [{value:"00",label:":00"},{value:"15",label:":15"},{value:"30",label:":30"},{value:"45",label:":45"}]
+          onChanged: function(value) { root.minute = value; root.scheduleChanged() }
+        }
+        ButtonGroup {
+          id: meridiemPicker
+          objectName: "field_meridiem"
+          width: Style.space(110)
+          value: root.meridiem
+          options: ["AM", "PM"]
+          onChanged: function(value) { root.meridiem = value; root.scheduleChanged() }
+        }
+      }
+    }
+
+    Column {
+      visible: root.mode === "Custom repeat"
+      width: parent.width
+      spacing: Style.spacing.labelGap
+      FieldLabel { text: "Cron expression" }
       TextField {
-        id: time
-        objectName: "field_time"
-        width: Style.space(90)
-        text: "09:00"
-        placeholderText: "HH:MM"
-        Accessible.name: "Schedule time"
-        onActiveFocusChanged: if (activeFocus) root.revealRequested(time)
+        id: advanced
+        objectName: "field_advanced"
+        width: parent.width
+        text: "0 9 * * *"
+        placeholderText: "minute hour day month weekday"
+        Accessible.name: "Five field cron"
+        onActiveFocusChanged: if (activeFocus) root.revealRequested(advanced)
         onTextChanged: root.scheduleChanged()
       }
+      Caption { text: "Five fields: minute, hour, day of month, month, day of week. 0 9 * * 1-5 is weekdays at 9:00 AM." }
     }
-    Dropdown {
-      id: weekday
-      visible: root.mode === "Weekly"
-      width: parent.width - time.width - parent.spacing
-      label: "Day"
-      value: "1"
-      options: [{value:"1",label:"Monday"},{value:"2",label:"Tuesday"},{value:"3",label:"Wednesday"},{value:"4",label:"Thursday"},{value:"5",label:"Friday"},{value:"6",label:"Saturday"},{value:"0",label:"Sunday"}]
-      onChanged: function(value) { weekday.value = value; root.scheduleChanged() }
-    }
-  }
 
-  Column {
-    visible: root.step === "edit" && root.mode === "Advanced"
-    width: parent.width
-    spacing: Style.spacing.labelGap
-    FieldLabel { text: "Cron expression" }
-    TextField {
-      id: advanced
-      objectName: "field_advanced"
-      width: parent.width
-      text: "0 9 * * *"
-      placeholderText: "minute hour day month weekday"
-      Accessible.name: "Five field cron"
-      onActiveFocusChanged: if (activeFocus) root.revealRequested(advanced)
-      onTextChanged: root.scheduleChanged()
-    }
-  }
+    Caption { id: previewLabel; text: root.previewText; visible: text !== "" }
 
-  Column {
-    visible: root.step === "edit" && root.mode !== "Manual"
-    width: parent.width
-    spacing: Style.spacing.labelGap
-    FieldLabel { text: "Time zone" }
-    TextField {
-      id: timezone
-      objectName: "field_timezone"
-      width: parent.width
-      text: root.defaults.timezone || "UTC"
-      placeholderText: "America/New_York"
-      Accessible.name: "Schedule timezone"
-      onActiveFocusChanged: if (activeFocus) root.revealRequested(timezone)
-      onTextChanged: root.scheduleChanged()
-    }
-  }
-
-  Caption { id: previewLabel; text: root.previewText; visible: root.step === "edit" && text !== "" }
-
-  Button {
-    visible: root.step === "edit"
-    text: root.showMore ? "Hide folder, model, and tools" : "Working folder, model, and tools"
-    iconText: root.showMore ? "󰅃" : "󰅀"
-    fontSize: Style.font.bodySmall
-    focusable: true
-    horizontalPadding: 0
-    onClicked: root.showMore = !root.showMore
-  }
-  Column {
-    visible: root.step === "edit" && root.showMore
-    width: parent.width
-    spacing: Style.space(10)
-    Column {
-      width: parent.width
-      spacing: Style.spacing.labelGap
-      FieldLabel { text: "Working folder" }
-      TextField {
-        id: folder
-        objectName: "field_folder"
-        width: parent.width
-        text: root.defaults.cwd || ""
-        Accessible.name: "Working folder"
-        onActiveFocusChanged: if (activeFocus) root.revealRequested(folder)
-      }
-      Caption { text: "Claude Code starts in this folder and can change what is in it." }
+    Button {
+      text: root.showMore ? "Hide time zone, folder, model, and tools" : "Time zone, folder, model, and tools"
+      iconText: root.showMore ? "󰅃" : "󰅀"
+      fontSize: Style.font.bodySmall
+      focusable: true
+      horizontalPadding: 0
+      onClicked: root.showMore = !root.showMore
     }
     Column {
+      visible: root.showMore
       width: parent.width
-      spacing: Style.spacing.labelGap
-      FieldLabel { text: "Model" }
-      TextField {
-        id: model
-        objectName: "field_model"
+      spacing: Style.space(10)
+      Column {
         width: parent.width
-        text: root.defaults.model || "claude-sonnet-5"
-        Accessible.name: "Claude model"
-        onActiveFocusChanged: if (activeFocus) root.revealRequested(model)
+        spacing: Style.spacing.labelGap
+        FieldLabel { text: "Time zone" }
+        TextField {
+          id: timezone
+          objectName: "field_timezone"
+          width: parent.width
+          text: root.defaults.timezone || "UTC"
+          placeholderText: "America/New_York"
+          Accessible.name: "Schedule timezone"
+          onActiveFocusChanged: if (activeFocus) root.revealRequested(timezone)
+          onTextChanged: root.scheduleChanged()
+        }
+        Caption { text: "Times above are in this zone. It starts as this machine's zone." }
       }
-      Caption { text: (root.defaults.verified_models || []).indexOf(model.text) >= 0 ? "This model has been verified with Omakron." : "This model is unverified. Runs will not fall back to another model." }
-    }
-    Column {
-      width: parent.width
-      spacing: Style.spacing.labelGap
-      FieldLabel { text: "Tools" }
-      TextField {
-        id: tools
-        objectName: "field_tools"
+      Column {
         width: parent.width
-        text: root.defaults.tools || "default"
-        placeholderText: "default"
-        Accessible.name: "Claude Code tools"
-        onActiveFocusChanged: if (activeFocus) root.revealRequested(tools)
+        spacing: Style.spacing.labelGap
+        FieldLabel { text: "Working folder" }
+        TextField {
+          id: folder
+          objectName: "field_folder"
+          width: parent.width
+          text: root.defaults.cwd || ""
+          Accessible.name: "Working folder"
+          onActiveFocusChanged: if (activeFocus) root.revealRequested(folder)
+        }
+        Caption { text: "Claude Code starts in this folder and can change what is in it." }
       }
-      Caption { text: "\"default\" is Claude Code's full tool set. Leave it empty for no tools, or list tool names separated by commas, such as Read,Edit,Bash." }
+      Column {
+        width: parent.width
+        spacing: Style.spacing.labelGap
+        FieldLabel { text: "Model" }
+        TextField {
+          id: model
+          objectName: "field_model"
+          width: parent.width
+          text: root.defaults.model || "claude-sonnet-5"
+          Accessible.name: "Claude model"
+          onActiveFocusChanged: if (activeFocus) root.revealRequested(model)
+        }
+        Caption { text: (root.defaults.verified_models || []).indexOf(model.text) >= 0 ? "This model has been verified with Omakron." : "This model is unverified. Runs will not fall back to another model." }
+      }
+      Column {
+        width: parent.width
+        spacing: Style.spacing.labelGap
+        FieldLabel { text: "Tools" }
+        TextField {
+          id: tools
+          objectName: "field_tools"
+          width: parent.width
+          text: root.defaults.tools || "default"
+          placeholderText: "default"
+          Accessible.name: "Claude Code tools"
+          onActiveFocusChanged: if (activeFocus) root.revealRequested(tools)
+        }
+        Caption { text: "\"default\" is Claude Code's full tool set. Leave it empty for no tools, or list tool names separated by commas, such as Read,Edit,Bash." }
+      }
+      Dropdown {
+        id: permission
+        objectName: "field_permission"
+        width: parent.width
+        label: "Permission mode"
+        value: root.permissionMode || root.defaults.permission_mode || "bypassPermissions"
+        options: root.defaults.permission_modes || ["bypassPermissions", "acceptEdits", "auto", "dontAsk", "manual", "plan"]
+        onChanged: function(value) { root.permissionMode = value }
+      }
+      Caption { text: "Nobody answers prompts during a scheduled run. bypassPermissions lets the run act on its own; a narrower mode denies whatever would have asked." }
     }
-    Dropdown {
-      id: permission
-      objectName: "field_permission"
-      width: parent.width
-      label: "Permission mode"
-      value: root.permissionMode || root.defaults.permission_mode || "bypassPermissions"
-      options: root.defaults.permission_modes || ["bypassPermissions", "acceptEdits", "auto", "dontAsk", "manual", "plan"]
-      onChanged: function(value) { root.permissionMode = value }
-    }
-    Caption { text: "Nobody answers prompts during a scheduled run. bypassPermissions lets the run act on its own; a narrower mode denies whatever would have asked." }
   }
 
   PanelSeparator { width: parent.width }

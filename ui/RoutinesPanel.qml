@@ -3,6 +3,7 @@ import QtQuick.Controls as Controls
 import Quickshell
 import qs.Commons
 import qs.Ui
+import "ScheduleText.js" as ScheduleText
 
 // The popup behind the bar icon. Step one of the design: a list of saved
 // routines, or an empty state, and the one action a fresh install needs:
@@ -44,10 +45,8 @@ Panel {
     editing = true
   }
   function scheduleText(routine) {
-    var when = routine.schedule_kind === "manual" ? "Runs when you ask" : routine.cron + " · " + routine.timezone
-    if (!routine.source) return when
-    var parts = routine.source.split("/")
-    return when + " · SKILL.md in " + parts[parts.length - 1]
+    var when = routine.schedule_kind === "manual" ? "Runs when you ask" : ScheduleText.describe(routine.cron)
+    return routine.source ? when + " · from a skill file" : when
   }
   onOpenedChanged: if (opened) refresh()
 
@@ -110,6 +109,9 @@ Panel {
                     flick.contentY = y + item.height - scroll.availableHeight
                 })
               }
+              onReopenRequested: Qt.callLater(function() {
+                if (!root.opened) { root.hostWidget ? root.hostWidget.open() : root.open() }
+              })
               onSaved: function(routine) {
                 root.editing = false
                 root.refresh()

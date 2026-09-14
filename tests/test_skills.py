@@ -76,20 +76,12 @@ def test_folder_without_skill_file_or_with_empty_body_is_refused(tmp_path):
         skills.load(str(write_skill(tmp_path / "long", "x" * (skills.MAX_PROMPT_CHARS + 1))))
 
 
-def test_discover_lists_skill_folders_under_each_root_once(tmp_path):
-    root_a, root_b = tmp_path / "a", tmp_path / "b"
-    write_skill(root_a / "beta", "---\nname: Beta\ndescription: second\n---\nB")
-    write_skill(root_a / "alpha", "---\nname: Alpha\ndescription: first\n---\nA")
-    (root_a / "not-a-skill").mkdir()
-    write_skill(root_a / "broken", "---\nname: Broken\n---\n\n")
-    write_skill(root_b / "gamma", "Body only")
-    (root_b / "alias").symlink_to(root_a / "alpha", target_is_directory=True)
-    found = skills.discover([str(root_a), str(root_b), str(tmp_path / "absent")])
-    assert [entry["name"] for entry in found] == ["Alpha", "Beta", "broken", "gamma"]
-    assert found[0] == {
-        "source": str(root_a / "alpha"),
-        "name": "Alpha",
-        "description": "first",
-        "root": str(root_a),
-    }
-    assert "no prompt" in found[2]["description"]
+def test_a_file_path_is_accepted_and_stored_as_given(tmp_path):
+    folder = write_skill(tmp_path / "triage")
+    by_file = skills.load(str(folder / "SKILL.md"))
+    by_folder = skills.load(str(folder))
+    assert by_file.source == str(folder / "SKILL.md") and by_folder.source == str(folder)
+    assert by_file.file == by_folder.file == str(folder / "SKILL.md")
+    assert by_file.prompt == by_folder.prompt and by_file.sha256 == by_folder.sha256
+    (tmp_path / "notes.md").write_text("---\nname: notes\n---\nAny markdown file works.\n")
+    assert skills.load(str(tmp_path / "notes.md")).name == "notes"

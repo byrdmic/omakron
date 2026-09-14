@@ -89,23 +89,21 @@ PYTHONPATH=src python -m omakron.client create-routine --name "Nightly tidy" \
   --permission-mode bypassPermissions --env GH_TOKEN
 ```
 
-A routine can point at a skill folder instead of carrying its own prompt. The
-folder holds a `SKILL.md` whose front matter gives a `name` and `description`
-and whose body is the prompt. The routine stores the folder path, and the
-worker reads the file again at every launch, so editing the file in a shared
-repository changes the next run on every machine with no re-import. Each run
-records the text it sent and the file's SHA-256. If the file is missing or
-empty at launch, the run fails with that reason. Schedule, working folder,
-and enabled state stay in Omakron, because a folder shared between machines
-should not decide where or whether a routine runs.
+A routine can import its prompt from a skill file instead of carrying its
+own. The file is a `SKILL.md` whose front matter gives a `name` and
+`description` and whose body is the prompt. The routine stores the file's
+location, and the worker reads the file again at every launch, so editing it
+in a shared repository changes the next run on every machine with no
+re-import. Each run records the text it sent and the file's SHA-256. If the
+file is missing or empty at launch, the run fails with that reason. Schedule,
+working folder, and enabled state stay in Omakron, because a file shared
+between machines should not decide where or whether a routine runs. The
+location may also be the folder that holds the file.
 
 ```
 PYTHONPATH=src python -m omakron.client create-routine \
-  --source ~/.claude/scheduled-tasks/nightly-tidy --cwd /path/to/project
+  --source ~/.claude/scheduled-tasks/nightly-tidy/SKILL.md --cwd /path/to/project
 ```
-
-The editor lists the skill folders under `~/.claude/scheduled-tasks` and
-`~/.claude/skills`. `skill_roots` in `settings.json` replaces that list.
 
 
 To repeat the real-CLI smoke test (one bounded model call under the existing

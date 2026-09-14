@@ -58,7 +58,6 @@ class ServiceHarness:
     root: Path
     deadline_s: float = 600.0
     extra_env: dict[str, str] = field(default_factory=dict)
-    settings: dict[str, Any] = field(default_factory=dict)  # merged into settings.json
     proc: subprocess.Popen | None = None
 
     def __post_init__(self) -> None:
@@ -83,13 +82,7 @@ class ServiceHarness:
         )
         self.wrapper.chmod(0o755)
         (self.config / "settings.json").write_text(
-            json.dumps(
-                {
-                    "claude_executable": str(self.wrapper),
-                    "deadline_s": self.deadline_s,
-                    **self.settings,
-                }
-            ),
+            json.dumps({"claude_executable": str(self.wrapper), "deadline_s": self.deadline_s}),
             encoding="utf-8",
         )
 

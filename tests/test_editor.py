@@ -155,13 +155,14 @@ def test_read_skill_previews_a_folder_and_refuses_a_bad_one(service, tmp_path):
         service.request("create_routine", dict(draft(service), source=str(tmp_path / "gone")))
 
 
-def test_editor_defaults_list_the_skills_under_the_configured_roots(service_factory, tmp_path):
-    skill_folder(tmp_path)
-    other = tmp_path / "skills" / "other"
-    other.mkdir()
-    (other / "SKILL.md").write_text("Plain body.\n", encoding="utf-8")
-    svc = service_factory("roots", settings={"skill_roots": [str(tmp_path / "skills")]})
-    defaults = svc.request("editor_defaults")
-    assert defaults["skill_roots"] == [str(tmp_path / "skills")]
-    assert [s["name"] for s in defaults["skills"]] == ["folder-notes", "other"]
-    assert defaults["skills"][0]["source"] == str(tmp_path / "skills" / "folder-notes")
+def test_import_by_file_path_stores_that_path_and_the_default_zone_is_local(service, tmp_path):
+    file = skill_folder(tmp_path) / "SKILL.md"
+    params = dict(draft(service), name="", source=str(file))
+    saved = service.request("create_routine", params)["routine"]
+    assert saved["source"] == str(file) and saved["name"] == "folder-notes"
+    shown = service.request("read_skill", {"source": str(file)})
+    assert shown["file"] == str(file) and shown["source"] == str(file)
+    defaults = service.request("editor_defaults")
+    assert "skill_roots" not in defaults and "skills" not in defaults
+    assert defaults["timezone"]  # a zone name the evaluator accepts
+    service.request("preview_schedule", {"cron": "0 9 * * *", "timezone": defaults["timezone"]})
