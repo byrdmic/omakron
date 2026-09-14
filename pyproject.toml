@@ -1,0 +1,47 @@
+[project]
+name = "omakron"
+version = "0.1.0"
+description = "A native Omarchy bar plugin for scheduled local Claude Code routines."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.14,<3.15"
+# The scheduler evaluates wall-clock candidates with this pinned parser.
+dependencies = ["croniter==6.2.4", "python-dateutil==2.9.0.post0", "six==1.17.0"]
+
+# Development tools are pinned with hashes in requirements/dev.txt. This table
+# only names them so `pip install -e .[dev]` resolves the same versions.
+[project.optional-dependencies]
+dev = [
+    "pytest==9.1.1",
+    "ruff==0.16.7",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-ra --strict-markers"
+xfail_strict = true
+markers = ["slow: starts the real service as a subprocess"]
+
+[tool.ruff]
+target-version = "py314"
+line-length = 100
+src = ["src", "tests", "scripts"]
+extend-exclude = ["docs"]
+
+[tool.ruff.format]
+exclude = ["scripts/verify_runner_profile.py"]  # standalone runner-profile verifier
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "S", "PL"]
+ignore = [
+    "S101",    # assert is the pytest idiom
+    "S603",    # subprocess without shell: argv lists are the required form
+    "PLR2004", # magic numbers in contract checks are named in context
+    "PLR0913", # explicit argument lists over hidden option objects
+    "PLR0911", # classifier returns one named outcome per branch
+    "PLR0912", # validators enumerate contract rules
+]
+
+[tool.ruff.lint.per-file-ignores]
+"scripts/verify_runner_profile.py" = ["ALL"]  # standalone runner-profile verifier

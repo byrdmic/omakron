@@ -1,0 +1,44 @@
+# Product checks for every pull request and for master.
+#
+# The job name `product-checks` is the status check the master ruleset
+# requires. It runs scripts/check.sh, the same script used locally, so CI and a
+# developer machine cannot disagree about what "passing" means. Actions are
+# pinned to commit SHAs; Python tools are pinned with hashes.
+#
+# What CI cannot check: loading ui/Widget.qml into a running Omarchy shell.
+# That needs a disposable Omarchy session (CONTRIBUTING.md), not a runner.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  product-checks:
+    name: product-checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out the candidate revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version-file: .python-version
+
+      - name: Install pinned development tools
+        run: python -m pip install --require-hashes -r requirements/dev.txt
+
+      - name: Run the product checks
+        run: scripts/check.sh

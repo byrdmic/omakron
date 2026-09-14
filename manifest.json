@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "omakron.routines",
+  "name": "Omakron",
+  "version": "0.1.0",
+  "author": "Omakron contributors",
+  "license": "MIT",
+  "description": "Scheduled local Claude Code routines in a native Omarchy bar panel.",
+  "kinds": ["bar-widget"],
+  "activation": "on-demand",
+  "entryPoints": {
+    "barWidget": "ui/Widget.qml"
+  },
+  "barWidget": {
+    "displayName": "Omakron",
+    "description": "One bar icon and one panel: your saved routines and a form to create one.",
+    "category": "AI",
+    "aliases": ["omakron", "routines"],
+    "defaultSection": "right",
+    "allowMultiple": false
+  }
+}

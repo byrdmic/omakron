@@ -1,0 +1,22 @@
+# Reference unit for default paths. scripts/manage.py setup-service generates
+# the installed unit with quoted XDG paths and the current executable PATH.
+
+[Unit]
+Description=Omakron scheduled Claude Code routines
+
+[Service]
+Type=simple
+Environment=PYTHONPATH=%h/.config/omarchy/plugins/omakron.routines/src
+ExecStart=%h/.config/omarchy/plugins/omakron.routines/.venv/bin/python -m omakron.service
+# The service owns the routine database and run output under XDG state; see
+# src/omakron/store.py. Restart on failure but never on a clean stop.
+Restart=on-failure
+RestartSec=5
+# Stop the whole control group so a supervised Claude process cannot outlive
+# the service; the runner also uses its own process group for cancellation.
+KillMode=control-group
+TimeoutStopSec=30
+UMask=0077
+
+[Install]
+WantedBy=default.target
