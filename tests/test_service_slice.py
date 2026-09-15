@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 
 from omakron import seed
+from omakron.client import ServiceError
 from omakron.runner import BASE_FLAGS, ENV_PASSTHROUGH
 
 from .service_harness import ServiceHarness, process_alive, tree_digest, wait_until
@@ -458,3 +459,37 @@ def test_cli_create_routine_from_a_source_folder(service: ServiceHarness, tmp_pa
     assert routine["name"] == "from-cli" and routine["source"] == str(folder)
     missing = service.client("create-routine", "--prompt", "x", "--cwd", cwd)
     assert missing.returncode != 0 and "--name is required" in missing.stderr
+
+
+@pytest.mark.slow
+def test_delete_routine_removes_it_from_omakron_and_refuses_later_work(service: ServiceHarness):
+    routine = service.seed_routine()
+    stale = service.client("delete-routine", routine["id"], "--revision", "99")
+    assert stale.returncode == 1
+    assert json.loads(stale.stdout)["error"]["code"] == "conflict"
+    assert service.seed_routine()["id"] == routine["id"], "a stale revision deletes nothing"
+
+    result = service.client("delete-routine", routine["id"])
+    assert result.returncode == 0, result.stdout + result.stderr
+    deleted = json.loads(result.stdout)["routine"]
+    assert deleted["id"] == routine["id"] and deleted["deleted_at"]
+
+    assert service.request("list_routines")["routines"] == []
+    assert service.request("dashboard")["routines"] == []
+    assert service.request("status")["routines"] == 0
+    with pytest.raises(ServiceError, match="deleted"):
+        service.request("run_now", {"routine_id": routine["id"]})
+    with pytest.raises(ServiceError, match="reload"):
+        service.request(
+            "set_enabled",
+            dict(routine_id=routine["id"], expected_revision=deleted["revision"], enabled=True),
+        )
+    with pytest.raises(ServiceError, match="reload"):
+        service.request(
+            "update_routine",
+            dict(routine, routine_id=routine["id"], expected_revision=deleted["revision"]),
+        )
+    again = service.client("delete-routine", routine["id"])
+    assert again.returncode == 1 and json.loads(again.stdout)["error"]["code"] == "conflict"
+    service.restart()
+    assert service.request("list_routines")["routines"] == [], "a restart does not reseed"

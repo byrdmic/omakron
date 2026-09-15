@@ -14,8 +14,9 @@ selected run. Run details show the saved prompt, requested and resolved models,
 the model's result, and bounded diagnostic tails. Disconnected details remain marked stale.
 
 Retry is explicit, links to the original run, and uses the current saved
-revision. Refresh never retries. Soft delete
-hides the routine and cancels waiting runs while preserving active work and history.
+revision. Refresh never retries. Delete, from the routine view or the client,
+removes the routine from Omakron and cancels its waiting runs. A run already
+started finishes, and recorded runs keep the copy of the routine they ran.
 
 Output settings accept 1 to 8192 KiB per stream and 1 to 3650 retention days.
 The supervisor checks output growth every 100 ms, stops oversized runs, and
@@ -68,6 +69,7 @@ PYTHONPATH=src python -m omakron.client routines
 PYTHONPATH=src python -m omakron.client run-now <routine-id> --wait 660
 PYTHONPATH=src python -m omakron.client run <run-id>
 PYTHONPATH=src python -m omakron.client cancel <run-id>
+PYTHONPATH=src python -m omakron.client delete-routine <routine-id>
 ```
 
 On first start the service seeds one routine, "Folder summary", manual only
@@ -125,8 +127,8 @@ overlap, and expires queued work after five minutes. Checkpoints and local-slot
 guards survive restarts. Interrupted work is never replayed automatically.
 The service does not enable lingering, wake timers, or execution while asleep.
 
-The raw JSON client also exposes `set_enabled`, `set_dispatch`, and
-`schedule_gaps`. For example, stop scheduled dispatch while keeping history:
+The raw JSON client also exposes `set_enabled`, `delete_routine`,
+`set_dispatch`, and `schedule_gaps`. For example, stop scheduled dispatch while keeping history:
 
 ```
 printf '%s' '{"op":"set_dispatch","params":{"enabled":false}}' | python scripts/client.py request

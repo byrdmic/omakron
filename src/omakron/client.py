@@ -117,6 +117,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="an environment variable the run inherits; repeatable",
     )
 
+    delete = sub.add_parser("delete-routine", help="remove a routine; its recorded runs stay")
+    delete.add_argument("routine_id")
+    delete.add_argument(
+        "--revision",
+        type=int,
+        help="the revision you expect to delete; default: the one saved now",
+    )
+
     run_now = sub.add_parser("run-now", help="queue one run of a routine")
     run_now.add_argument("routine_id")
     run_now.add_argument("--key", help="idempotency key; default: a fresh UUID")
@@ -181,6 +189,13 @@ def _dispatch(args: argparse.Namespace) -> Any:
             "env_passthrough": args.env,
         }
         return request("create_routine", params, sock=sock)
+    if args.command == "delete-routine":
+        revision = args.revision
+        if revision is None:
+            current = request("get_routine", {"routine_id": args.routine_id}, sock=sock)
+            revision = current["routine"]["revision"]
+        params = {"routine_id": args.routine_id, "expected_revision": revision}
+        return request("delete_routine", params, sock=sock)
     if args.command == "run-now":
         params = {
             "routine_id": args.routine_id,

@@ -276,14 +276,6 @@ class HistoryApi:
             "output_settings": output_settings(store),
         }
 
-    def op_delete_routine(self, params: dict) -> dict:
-        routine = self._routine(params)
-        revision = params.get("expected_revision")
-        if isinstance(revision, bool) or not isinstance(revision, int):
-            raise StoreError("expected_revision is required")
-        deleted = self._store().delete_routine(routine.id, revision)
-        return {"routine": deleted.to_dict()}
-
     def op_retry_run(self, params: dict) -> dict:
         original = self._store().get_run(params.get("run_id", ""))
         if not original.terminal:

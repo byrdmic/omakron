@@ -350,6 +350,19 @@ class Service(history.HistoryApi):
             raise ApiError("conflict", str(exc)) from exc
         return {"routine": updated.to_dict()}
 
+    def op_delete_routine(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Remove the routine from Omakron. Recorded runs keep their saved copy of it."""
+        routine = self._routine(params)
+        revision = params.get("expected_revision")
+        if isinstance(revision, bool) or not isinstance(revision, int):
+            raise ApiError("bad_request", "expected_revision is required")
+        try:
+            deleted = self._store().delete_routine(routine.id, revision)
+        except StoreError as exc:
+            raise ApiError("conflict", str(exc)) from exc
+        self.wake.set()
+        return {"routine": deleted.to_dict()}
+
     def op_preview_schedule(self, params: dict[str, Any]) -> dict[str, Any]:
         try:
             schedule = Schedule(params.get("cron"), params.get("timezone"))

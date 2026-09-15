@@ -32,6 +32,7 @@ Panel {
   property var run: null  // the run open in the run view; a summary until the detail arrives
   property string error: ""
   property string settingsNote: ""
+  property bool confirmingDelete: false  // the routine view is asking whether to delete
   property real nowMs: Date.now()
 
   readonly property color dim: Qt.darker(Color.foreground, 1.4)
@@ -99,9 +100,28 @@ Panel {
     error = ""
     bridge.request("set_dispatch", {enabled: enabled})
   }
+  // Delete asks once, inline, then removes the routine from Omakron. Runs
+  // already recorded keep their saved copy of it; a queued run is canceled
+  // and one already started finishes on its own.
+  function askDelete() {
+    if (samples || bridge.busy || !routine) return
+    error = ""
+    confirmingDelete = true
+    confirmDelete.forceActiveFocus()
+  }
+  function keepRoutine() {
+    confirmingDelete = false
+    deleteButton.forceActiveFocus()
+  }
+  function deleteRoutine() {
+    if (samples || bridge.busy || !routine) return
+    error = ""
+    bridge.request("delete_routine", {routine_id: routine.id, expected_revision: routine.revision})
+  }
   function openRoutine(target) {
     routine = target
     runs = []
+    confirmingDelete = false
     view = "routine"
     if (!samples) bridge.request("list_runs", {routine_id: target.id, limit: 30})
   }
@@ -123,6 +143,7 @@ Panel {
   }
   function back() {
     error = ""
+    confirmingDelete = false
     if (view === "run" && routine) { view = "routine"; run = null }
     else { view = "list"; run = null; routine = null }
     sync()
@@ -178,6 +199,7 @@ Panel {
       else if (op === "get_run") root.run = data.run
       else if (op === "get_routine") { root.editTarget = data.routine; root.editing = true }
       else if (op === "set_enabled") { root.routine = data.routine; bridge.request("dashboard", {}) }
+      else if (op === "delete_routine") { root.confirmingDelete = false; root.routine = null; root.back() }
       else if (op === "set_dispatch") { root.dispatchEnabled = data.dispatch_enabled !== false; bridge.request("dashboard", {}) }
       else if (op === "run_now") { root.nowMs = Date.now(); bridge.request("dashboard", {}) }
       else if (op === "output_settings") {
@@ -463,7 +485,8 @@ Panel {
               width: parent.width
               visible: root.view === "routine" && root.routine !== null
               spacing: Style.space(12)
-              Row {
+              Flow {
+                width: parent.width
                 spacing: Style.space(8)
                 Button {
                   text: "Run now"
@@ -492,6 +515,46 @@ Panel {
                   bordered: true
                   enabled: !root.samples && root.connected && !bridge.busy
                   onClicked: root.setEnabled(root.routine, !root.routine.enabled)
+                }
+                Button {
+                  id: deleteButton
+                  objectName: "deleteRoutine"
+                  visible: !root.confirmingDelete
+                  text: "Delete"
+                  iconText: "󰆴"
+                  tooltipText: "Remove this routine from Omakron"
+                  focusable: true
+                  bordered: true
+                  enabled: !root.samples && root.connected && !bridge.busy
+                  onClicked: root.askDelete()
+                }
+              }
+              Row {
+                visible: root.confirmingDelete
+                spacing: Style.space(8)
+                Body {
+                  width: implicitWidth
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: "Delete this routine? Its recorded runs stay."
+                }
+                Button {
+                  id: confirmDelete
+                  objectName: "confirmDelete"
+                  text: "Delete"
+                  iconText: "󰆴"
+                  focusable: true
+                  bordered: true
+                  enabled: !root.samples && root.connected && !bridge.busy
+                  Keys.onEscapePressed: root.keepRoutine()
+                  onClicked: root.deleteRoutine()
+                }
+                Button {
+                  objectName: "keepRoutine"
+                  text: "Keep"
+                  focusable: true
+                  bordered: true
+                  Keys.onEscapePressed: root.keepRoutine()
+                  onClicked: root.keepRoutine()
                 }
               }
               Caption {
