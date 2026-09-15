@@ -332,6 +332,7 @@ def verify_editor_flow(ipc, key, capture, *, out):
     assert not state()["editing"] and len(state()["routines"]) == 2
 
     edited = verify_edit_flow(ipc, key, capture, state, saved)
+    verify_sourced_edit(ipc, key, capture, state, out / "skill" / "SKILL.md")
     (out / "editor-result.json").write_text(
         json.dumps(
             {
@@ -347,12 +348,53 @@ def verify_editor_flow(ipc, key, capture, *, out):
                     "save leaves the schedule off",
                     "edit reloads schedule, saves revision 2, Escape discards",
                     "schedule on then off from the routine view",
+                    "imported routine edited as soon as it opens saves the typed minute",
                 ],
             },
             indent=2,
         )
         + "\n"
     )
+
+
+def verify_sourced_edit(ipc, key, capture, state, skill):
+    """Import a skill, then edit that routine the moment it opens and save a typed minute.
+
+    Opening a sourced routine reads its skill file and previews its schedule in
+    the same tick; the client must take them one at a time and still accept the save.
+    """
+    skill.parent.mkdir()
+    skill.write_text("---\nname: Imported skill\ndescription: Synthetic.\n---\n\nWrite one line.\n")
+    key("Escape")
+    wait_until(lambda: state()["view"] == "list")
+    ipc("test", "focus", "newRoutine")
+    key("Return")
+    wait_until(lambda: state()["editing"])
+    ipc("test", "focus", "importSkill")
+    key("Return")
+    ipc("test", "set", "field_source", str(skill))
+    wait_until(lambda: state()["skill"] == str(skill))
+    ipc("test", "focus", "useSkill")
+    key("Return")
+    ipc("test", "focus", "saveRoutine")
+    key("Return")
+
+    def imported():
+        return [r for r in state()["routines"] if r["name"] == "Imported skill"]
+
+    wait_until(lambda: not state()["editing"] and imported())
+    ipc("test", "openRoutine", "Imported skill")
+    wait_until(lambda: state()["view"] == "routine")
+    ipc("test", "focus", "editRoutine")
+    key("Return")
+    wait_until(lambda: state()["editing"] and state()["mode"] == "Daily")
+    ipc("test", "set", "field_minute", "36")
+    ipc("test", "focus", "saveRoutine")
+    key("Return")
+    wait_until(lambda: not state()["editing"])
+    assert imported()[0]["cron"] == "36 9 * * *" and imported()[0]["revision"] == 2, imported()
+    assert state()["skill"] == "", state()
+    capture("editor-sourced-edited")
 
 
 def verify_edit_flow(ipc, key, capture, state, saved):

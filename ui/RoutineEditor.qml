@@ -91,9 +91,12 @@ Column {
       previewText = "Checking the next run times..."
     }
   }
+  // Save waits its turn behind a preview or skill read instead of dropping
+  // the press, so a click right after a change still lands.
   function save() {
     if (cronExpression() === "no days") { error = "Pick at least one day."; return }
     error = ""
+    if (client.busy) { saveTimer.restart(); return }
     if (revising) {
       var params = draft()
       params.routine_id = existing.id
@@ -209,7 +212,7 @@ Column {
       Accessible.name: "Minute, 0 to 59"
       onTextChanged: field.commit(text)
       onEditingFinished: text = field.value
-      onActiveFocusChanged: if (activeFocus) field.focused()
+      onActiveFocusChanged: if (activeFocus) { field.focused(); Qt.callLater(selectAll) }
       Keys.onPressed: function(event) {
         if (event.key === Qt.Key_Down) { menu.open(); event.accepted = true }
       }
@@ -299,6 +302,7 @@ Column {
   }
 
   Timer { id: previewTimer; interval: 400; onTriggered: root.preview() }
+  Timer { id: saveTimer; interval: 50; onTriggered: root.save() }
   Timer { id: skillTimer; interval: 400; onTriggered: root.readSkill() }
   Component.onCompleted: { if (revising) load(existing); scheduleChanged() }
 
@@ -759,7 +763,7 @@ Column {
       text: root.revising ? "Save changes" : "Save routine"
       focusable: true
       bordered: true
-      enabled: root.connected && !root.client.busy
+      enabled: root.connected
       onActiveFocusChanged: if (activeFocus) root.revealRequested(this)
       onClicked: root.save()
     }
