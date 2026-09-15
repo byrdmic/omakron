@@ -78,9 +78,9 @@ Panel {
     error = ""
     bridge.request("run_now", {routine_id: target.id, idempotency_key: "popup:" + target.id + ":" + Date.now()})
   }
-  // Resume or pause a cron routine. Resume schedules the next occurrence
-  // with no catch-up; pause drops queued scheduled work and leaves a run
-  // already started alone.
+  // Turn a cron routine's schedule on or off. On schedules the next
+  // occurrence with no catch-up; off drops queued scheduled work and leaves
+  // a run already started alone.
   function setEnabled(target, enabled) {
     if (samples || bridge.busy || !target) return
     error = ""
@@ -117,7 +117,7 @@ Panel {
   }
   function scheduleText(target) {
     var when = target.schedule_kind === "manual" ? "Runs when you ask"
-        : (target.enabled ? "" : "Paused · ") + ScheduleText.describe(target.cron)
+        : ScheduleText.describe(target.cron) + (target.enabled ? "" : " · schedule off")
     return target.source ? when + " · from a skill file" : when
   }
   function statusColor(status) {
@@ -439,9 +439,9 @@ Panel {
                 Button {
                   objectName: "toggleEnabled"
                   visible: root.routine && root.routine.schedule_kind === "cron" ? true : false
-                  text: root.routine && root.routine.enabled ? "Pause" : "Resume"
-                  iconText: root.routine && root.routine.enabled ? "󰏤" : "󰥔"
-                  tooltipText: root.routine && root.routine.enabled ? "Stop scheduled runs" : "Start scheduled runs"
+                  text: root.routine && root.routine.enabled ? "Turn off schedule" : "Turn on schedule"
+                  iconText: "󰥔"
+                  tooltipText: root.routine && root.routine.enabled ? "Stop running on the schedule" : "Start running on the schedule"
                   focusable: true
                   bordered: true
                   enabled: !root.samples && root.connected && !bridge.busy

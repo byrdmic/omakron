@@ -18,7 +18,7 @@ import "ScheduleText.js" as ScheduleText
 // With `existing` set, the same form edits that routine: the fields start
 // from its saved values, the schedule is decoded back into the pickers when
 // this editor could have written it, and saving sends update_routine with
-// the revision the form was opened on. Saving an edit pauses the routine.
+// the revision the form was opened on. Saving an edit turns the schedule off.
 Column {
   id: root
   objectName: "routineEditor"
@@ -172,6 +172,130 @@ Column {
     if (step === "choose") writeButton.forceActiveFocus()
     else if (step === "pick") sourceField.forceActiveFocus()
     else name.forceActiveFocus()
+  }
+
+  // The minute of the hour, typed or picked. A two-digit field takes any
+  // minute from 0 to 59, and the chevron opens the quarter-hour presets,
+  // so 3:36 PM is as easy to set as 3:30. Keystrokes outside 0-59 are
+  // refused, and a value set some other way is ignored until it is valid.
+  component MinuteField: Item {
+    id: field
+    property string value: "00"
+    readonly property var presets: ["00", "15", "30", "45"]
+    signal changed(string value)
+    signal focused()
+    implicitHeight: Style.spacing.controlHeight
+
+    function pad(n) { return n < 10 ? "0" + n : String(n) }
+    function accepts(text) { return /^\d{1,2}$/.test(text) && Number(text) <= 59 }
+    function commit(text) {
+      if (!accepts(text)) return
+      var v = pad(Number(text))
+      if (v !== value) changed(v)
+    }
+    function pick(v) { input.text = v; menu.close() }
+    onValueChanged: if (!input.activeFocus) input.text = value
+    Component.onCompleted: input.text = value
+
+    TextField {
+      id: input
+      objectName: "field_minute"
+      anchors.fill: parent
+      leftPadding: horizontalPadding + Border.left(_borderSpec) + colon.width
+      rightPadding: horizontalPadding + Border.right(_borderSpec) + chevron.width + Style.spacing.controlGap
+      maximumLength: 2
+      inputMethodHints: Qt.ImhDigitsOnly
+      validator: IntValidator { bottom: 0; top: 59 }
+      Accessible.name: "Minute, 0 to 59"
+      onTextChanged: field.commit(text)
+      onEditingFinished: text = field.value
+      onActiveFocusChanged: if (activeFocus) field.focused()
+      Keys.onPressed: function(event) {
+        if (event.key === Qt.Key_Down) { menu.open(); event.accepted = true }
+      }
+    }
+    Text {
+      id: colon
+      anchors.left: parent.left
+      anchors.verticalCenter: parent.verticalCenter
+      anchors.leftMargin: input.horizontalPadding + Border.left(input._borderSpec)
+      text: ":"
+      color: Qt.darker(input.foreground, 1.2)
+      font.family: Style.font.family
+      font.pixelSize: Style.font.body
+    }
+    Text {
+      id: chevron
+      anchors.right: parent.right
+      anchors.verticalCenter: parent.verticalCenter
+      anchors.rightMargin: Border.right(input._borderSpec) + Style.spacing.controlGap
+      text: "󰅀"
+      color: Qt.darker(input.foreground, 1.2)
+      font.family: Style.font.family
+      font.pixelSize: Style.font.body
+      MouseArea {
+        anchors.fill: parent
+        anchors.margins: -Style.space(4)
+        cursorShape: Qt.PointingHandCursor
+        onClicked: menu.opened ? menu.close() : menu.open()
+      }
+    }
+    Controls.Popup {
+      id: menu
+      x: 0
+      y: field.height + Style.spacing.xxs
+      width: field.width
+      implicitHeight: field.presets.length * Style.spacing.popupRowHeight + (field.presets.length - 1) * Style.spacing.labelGap + Style.spacing.xxs
+      readonly property var borderSpec: Border.localOrSurfaceSpec("popups", "border", Color.popups.border, Color.popups.border, Style.normalBorderWidth)
+      padding: Style.spacing.hairline
+      leftPadding: Border.left(borderSpec) + Style.spacing.hairline
+      rightPadding: Border.right(borderSpec) + Style.spacing.hairline
+      topPadding: Border.top(borderSpec) + Style.spacing.hairline
+      bottomPadding: Border.bottom(borderSpec) + Style.spacing.hairline
+      focus: true
+      background: BorderSurface { color: Color.popups.background; borderSpec: menu.borderSpec; radius: Style.cornerRadius }
+      onOpened: { options.currentIndex = Math.max(0, field.presets.indexOf(field.value)); options.forceActiveFocus() }
+      onClosed: input.forceActiveFocus()
+      contentItem: ListView {
+        id: options
+        spacing: Style.spacing.labelGap
+        implicitHeight: contentHeight
+        clip: true
+        boundsBehavior: Flickable.StopAtBounds
+        model: field.presets
+        Keys.priority: Keys.BeforeItem
+        Keys.onPressed: function(event) {
+          if (event.key === Qt.Key_Escape) { menu.close(); event.accepted = true }
+          else if (event.key === Qt.Key_Down || event.text === "j") { options.currentIndex = Math.min(field.presets.length - 1, options.currentIndex + 1); event.accepted = true }
+          else if (event.key === Qt.Key_Up || event.text === "k") { options.currentIndex = Math.max(0, options.currentIndex - 1); event.accepted = true }
+          else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) { field.pick(field.presets[options.currentIndex]); event.accepted = true }
+        }
+        delegate: Rectangle {
+          required property string modelData
+          required property int index
+          width: options.width
+          height: Style.spacing.popupRowHeight
+          color: index === options.currentIndex ? Style.hoverFillFor(Color.popups.text, Color.accent) : "transparent"
+          Text {
+            textFormat: Text.PlainText
+            anchors.left: parent.left
+            anchors.verticalCenter: parent.verticalCenter
+            anchors.leftMargin: Style.spacing.controlPaddingX
+            text: ":" + parent.modelData
+            color: parent.index === options.currentIndex ? Style.hoverStateColor(Color.popups.text, Color.accent) : Color.popups.text
+            font.family: Style.font.family
+            font.pixelSize: Style.font.body
+          }
+          MouseArea {
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onPositionChanged: options.currentIndex = parent.index
+            onClicked: field.pick(parent.modelData)
+          }
+        }
+      }
+    }
   }
 
   Timer { id: previewTimer; interval: 400; onTriggered: root.preview() }
@@ -481,14 +605,12 @@ Column {
           options: ["12", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11"]
           onChanged: function(value) { root.hour12 = Number(value); root.scheduleChanged() }
         }
-        Dropdown {
+        MinuteField {
           id: minutePicker
-          objectName: "field_minute"
           width: Style.space(72)
-          showLabel: false
           value: root.minute
-          options: [{value:"00",label:":00"},{value:"15",label:":15"},{value:"30",label:":30"},{value:"45",label:":45"}]
           onChanged: function(value) { root.minute = value; root.scheduleChanged() }
+          onFocused: root.revealRequested(minutePicker)
         }
         ButtonGroup {
           id: meridiemPicker
@@ -624,7 +746,7 @@ Column {
   Caption {
     visible: root.step === "edit"
     text: (root.defaults.policy || "Claude Code runs with its usual tools and no permission prompts.")
-      + (root.revising ? " Saving pauses the routine. A run already started finishes." : " New routines start paused so you can review them first.")
+      + (root.revising ? " Saving turns the schedule off until you turn it back on. A run already started finishes." : " New routines start with the schedule off so you can review them first.")
   }
   Caption { text: root.error; visible: text !== ""; color: Color.urgent }
 

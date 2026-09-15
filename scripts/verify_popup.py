@@ -271,6 +271,22 @@ def start_service(env, *, scratch, out, processes):
     wait_until((Path(env["XDG_RUNTIME_DIR"]) / "omakron/service.sock").exists)
 
 
+def verify_minute_field(ipc, key, capture, state):
+    """Type a minute the presets lack, refuse one past 59, then pick a preset by keyboard."""
+    ipc("test", "editor", "Daily")
+    ipc("test", "set", "field_minute", "36")
+    wait_until(lambda: state()["cron"] == "36 9 * * *" and "Next runs" in state()["preview"])
+    capture("editor-minute")
+    ipc("test", "set", "field_minute", "75")
+    ipc("test", "set", "field_minute", "5")
+    wait_until(lambda: state()["cron"] == "5 9 * * *")
+    ipc("test", "focus", "field_minute")
+    key("Down")
+    key("Down")
+    key("Return")
+    wait_until(lambda: state()["cron"] == "15 9 * * *")
+
+
 def verify_editor_flow(ipc, key, capture, *, out):
     """Use the actual editor and socket client against the service started earlier."""
     ipc("test", "position", "top")
@@ -288,6 +304,7 @@ def verify_editor_flow(ipc, key, capture, *, out):
     key("Return")
     ipc("test", "set", "field_name", "Keyboard schedule")
     ipc("test", "set", "field_prompt", "A literal report prompt with $ and quotes.")
+    verify_minute_field(ipc, key, capture, state)
     ipc("test", "editor", "Custom repeat")
     ipc("test", "set", "field_advanced", "0 9 * * 1-5")
     wait_until(lambda: "Next runs" in state()["preview"])
@@ -324,11 +341,12 @@ def verify_editor_flow(ipc, key, capture, *, out):
                 "edited": edited,
                 "checks": [
                     "keyboard create/save/cancel",
+                    "typed minute 36 previews, 75 is ignored, 5 is accepted, presets pick :15",
                     "five previews",
                     "invalid draft retained",
-                    "save paused",
+                    "save leaves the schedule off",
                     "edit reloads schedule, saves revision 2, Escape discards",
-                    "resume then pause from the routine view",
+                    "schedule on then off from the routine view",
                 ],
             },
             indent=2,
@@ -368,14 +386,14 @@ def verify_edit_flow(ipc, key, capture, state, saved):
     assert not state()["editing"] and state()["view"] == "routine"
     assert all(r["name"] != "Discard this edit" for r in state()["routines"])
 
-    # Resume the paused routine from its view, then pause it again.
+    # Turn the schedule on from the routine view, then off again.
     def enabled():
         return [r["enabled"] for r in state()["routines"] if r["id"] == saved["id"]][0]
 
     ipc("test", "focus", "toggleEnabled")
     key("Return")
     wait_until(enabled)
-    capture("routine-resumed")
+    capture("schedule-on")
     ipc("test", "focus", "toggleEnabled")
     key("Return")
     wait_until(lambda: not enabled())
