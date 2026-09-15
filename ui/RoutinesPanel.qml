@@ -447,11 +447,10 @@ Panel {
                   enabled: !root.samples && root.connected && !bridge.busy
                   onClicked: root.setEnabled(root.routine, !root.routine.enabled)
                 }
-                Caption {
-                  anchors.verticalCenter: parent.verticalCenter
-                  width: implicitWidth
-                  text: root.routine && root.routine.source ? root.routine.source : ""
-                }
+              }
+              Caption {
+                visible: root.routine && root.routine.source ? true : false
+                text: root.routine && root.routine.source ? "Prompt read from " + root.routine.source : ""
               }
               Caption { text: "Runs, newest first. Click one for its result and log."; visible: root.runs.length > 0 }
               Body {
