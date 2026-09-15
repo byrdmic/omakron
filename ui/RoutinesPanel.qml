@@ -8,8 +8,9 @@ import "ScheduleText.js" as ScheduleText
 
 // The popup behind the bar icon. Four views: the list of routines with each
 // one's latest run, a routine with its run history, one run with its result
-// and log, and settings. While any run is open the panel polls the service
-// every two seconds, so pressing Run now shows the run start, run, and end.
+// and log, and settings. While open the panel polls the service every ten
+// seconds, and every two seconds while a run is open or one is due within
+// ninety seconds, so a scheduled start shows up as it happens.
 Panel {
   id: root
   objectName: "routinesPanel"
@@ -45,6 +46,10 @@ Panel {
   readonly property bool disconnected: samples ? sampleState === "error" : (!connected && loaded)
   readonly property bool anyOpen: (run && ScheduleText.isOpen(run.status))
     || routines.some(function(r) { return r.latest_run && ScheduleText.isOpen(r.latest_run.status) })
+  // A scheduled run is about to start, so poll fast enough to catch it.
+  readonly property bool dueSoon: dispatchEnabled && routines.some(function(r) {
+    return r.enabled && r.next_run_at && Date.parse(r.next_run_at) - nowMs < 90000
+  })
 
   function dismiss() {
     editing = false
@@ -142,11 +147,11 @@ Panel {
     running: root.opened
     onTriggered: root.nowMs = Date.now()
   }
-  // Live updates while something is running.
+  // Live updates. Slow while idle, fast while a run is open or about to start.
   Timer {
-    interval: 2000
+    interval: root.anyOpen || root.dueSoon ? 2000 : 10000
     repeat: true
-    running: root.opened && !root.editing && !root.samples && root.anyOpen
+    running: root.opened && !root.editing && !root.samples
     onTriggered: { root.nowMs = Date.now(); root.sync() }
   }
 
