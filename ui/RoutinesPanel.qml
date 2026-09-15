@@ -21,6 +21,7 @@ Panel {
   property bool loaded: false
   property bool editing: false
   property string error: ""
+  property var runNotes: ({})  // routine id -> what Run now just did
 
   readonly property color dim: Qt.darker(Color.foreground, 1.4)
   readonly property string sampleState: setting("sampleState", "")
@@ -44,6 +45,11 @@ Panel {
     error = ""
     editing = true
   }
+  function runNow(routine) {
+    if (samples || bridge.busy) return
+    error = ""
+    bridge.request("run_now", {routine_id: routine.id, idempotency_key: "popup:" + routine.id + ":" + Date.now()})
+  }
   function scheduleText(routine) {
     var when = routine.schedule_kind === "manual" ? "Runs when you ask" : ScheduleText.describe(routine.cron)
     return routine.source ? when + " · from a skill file" : when
@@ -56,6 +62,11 @@ Panel {
       root.connected = true
       if (op === "editor_defaults") { root.defaults = data; bridge.request("list_routines", {}) }
       else if (op === "list_routines") { root.routines = data.routines; root.loaded = true; root.error = "" }
+      else if (op === "run_now") {
+        var notes = Object.assign({}, root.runNotes)
+        notes[params.routine_id] = data.created ? "Queued just now" : "Already queued"
+        root.runNotes = notes
+      }
     }
     onFailure: function(op, code, message) {
       if (code === "unreachable") root.connected = false
@@ -71,7 +82,7 @@ Panel {
     bar: root.bar
     open: root.opened
     focusTarget: root.editing && editor.item ? editor.item : newRoutine
-    contentWidth: fittedContentWidth(Style.space(root.editing ? 520 : 400))
+    contentWidth: fittedContentWidth(Style.space(root.editing ? 660 : 400))
     contentHeight: fittedContentHeight(column.implicitHeight, Style.space(root.editing ? 860 : 560))
 
     FocusScope {
@@ -178,12 +189,33 @@ Panel {
               spacing: Style.space(8)
               Repeater {
                 model: root.rows
-                Column {
+                Row {
+                  id: row
                   required property var modelData
                   width: parent.width
-                  spacing: Style.space(2)
-                  Body { text: modelData.name; elide: Text.ElideRight; wrapMode: Text.NoWrap }
-                  Caption { text: root.scheduleText(modelData) }
+                  spacing: Style.space(8)
+                  Column {
+                    width: parent.width - runButton.width - parent.spacing
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: Style.space(2)
+                    Body { width: parent.width; text: row.modelData.name; elide: Text.ElideRight; wrapMode: Text.NoWrap }
+                    Caption {
+                      width: parent.width
+                      text: root.scheduleText(row.modelData) + (root.runNotes[row.modelData.id] ? " · " + root.runNotes[row.modelData.id] : "")
+                    }
+                  }
+                  Button {
+                    id: runButton
+                    objectName: "runNow"
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: "Run now"
+                    iconText: "󰐊"
+                    fontSize: Style.font.bodySmall
+                    focusable: true
+                    bordered: true
+                    enabled: !root.samples && root.connected && !bridge.busy
+                    onClicked: root.runNow(row.modelData)
+                  }
                 }
               }
             }

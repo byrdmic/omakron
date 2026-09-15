@@ -24,7 +24,10 @@ from pathlib import Path
 
 PLUGIN_ID = "omakron.routines"
 UNIT = "omakron.service"
-COMPATIBLE = {"omarchy": "4.0.2-1", "claude": "2.1.270", "qs": "0.3.1"}
+# The oldest versions this release was verified on. Anything newer passes:
+# the CLI and the shell update themselves often, and an exact pin would stop
+# the service after every one of those updates.
+MINIMUM = {"omarchy": "4.0.2", "claude": "2.1.270", "qs": "0.3.1"}
 
 
 class InstallError(Exception):
@@ -84,16 +87,26 @@ class Layout:
         return self.data / "omakron/backups"
 
 
+def version_key(text: str) -> tuple[int, ...]:
+    """``"4.0.2-1"`` -> ``(4, 0, 2, 1)``: every run of digits, in order."""
+    return tuple(int(part) for part in re.findall(r"\d+", text))
+
+
 def compatibility() -> dict:
-    if sys.version_info[:2] != (3, 14):
-        raise InstallError("this release was verified with Python 3.14")
+    """The platform versions, or :class:`InstallError` if any is older than verified."""
+    if sys.version_info[:2] < (3, 14):  # noqa: UP036 - guards a foreign interpreter
+        raise InstallError("this release needs Python 3.14 or newer")
     versions = {
         "omarchy": run(["omarchy", "version"]),
         "claude": run(["claude", "--version"]).split()[0],
         "qs": run(["qs", "--version"]).split()[1],
     }
-    if versions != COMPATIBLE:
-        raise InstallError(f"unverified platform: {versions}; verified: {COMPATIBLE}")
+    for name, found in versions.items():
+        if not version_key(found) or version_key(found) < version_key(MINIMUM[name]):
+            raise InstallError(
+                f"unsupported platform: {name} {found!r} is older than {MINIMUM[name]};"
+                f" found {versions}"
+            )
     return versions
 
 
@@ -420,7 +433,7 @@ def plan(
     }
     return {
         "action": action,
-        "requires": COMPATIBLE,
+        "requires_at_least": MINIMUM,
         "plugin": str(layout.plugin),
         "unit": str(layout.unit),
         "state": str(layout.state / "omakron"),

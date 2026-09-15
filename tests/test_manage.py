@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from omakron import manage
 from omakron.manage import (
     InstallError,
     Layout,
@@ -229,3 +230,15 @@ def test_preview_names_requested_source(installation, monkeypatch, capsys):
     monkeypatch.setattr(Layout, "current", lambda: installation)
     assert main(["install", "--source", "https://example.invalid/omakron.git"]) == 0
     assert json.loads(capsys.readouterr().out)["source"] == "https://example.invalid/omakron.git"
+
+
+def test_platform_check_accepts_newer_versions_and_refuses_older(monkeypatch):
+    answers = {"omarchy": "4.1.0-2", "claude": "2.2.0 (Claude Code)", "qs": "quickshell 0.3.1"}
+    monkeypatch.setattr("omakron.manage.run", lambda argv: answers[argv[0]])
+    assert manage.compatibility() == {"omarchy": "4.1.0-2", "claude": "2.2.0", "qs": "0.3.1"}
+    answers["claude"] = "2.1.9 (Claude Code)"
+    with pytest.raises(manage.InstallError, match="claude '2.1.9' is older than 2.1.270"):
+        manage.compatibility()
+    assert manage.version_key("4.0.2-1") == (4, 0, 2, 1)
+    assert manage.version_key("4.0.2-1") >= manage.version_key("4.0.2")
+    assert manage.version_key("4.0.10") > manage.version_key("4.0.9")

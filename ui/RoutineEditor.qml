@@ -25,7 +25,7 @@ Column {
   property string previewText: ""
   property string previewKey: ""
   property string step: "choose"  // choose, pick, edit
-  property string mode: "Daily"  // Hourly, Daily, Weekly, Custom time, Custom repeat
+  property string mode: "Daily"  // Manual, Hourly, Daily, Weekly, Custom time, Custom repeat
   property int hour12: 9
   property string minute: "00"
   property string meridiem: "AM"
@@ -43,6 +43,7 @@ Column {
   property bool nameFromSkill: false
   readonly property bool sourced: source !== ""
   readonly property bool skillReady: sourced && skillFile !== ""
+  readonly property bool manual: mode === "Manual"
   readonly property bool timed: mode === "Daily" || mode === "Weekly" || mode === "Custom time"
   readonly property color dim: Qt.darker(Color.foreground, 1.4)
   signal revealRequested(var item)
@@ -55,6 +56,7 @@ Column {
   function hour24() { return (hour12 % 12) + (meridiem === "PM" ? 12 : 0) }
   function cronExpression() {
     var at = Number(minute) + " " + hour24()
+    if (manual) return null
     if (mode === "Hourly") return "0 * * * *"
     if (mode === "Daily") return at + " * * *"
     if (mode === "Weekly") return at + " * * " + weekday
@@ -63,7 +65,7 @@ Column {
   }
   function draft() {
     return {name: name.text, prompt: prompt.text, source: root.source || null, model: model.text, cwd: folder.text,
-      schedule_kind: "cron", cron: cronExpression(), timezone: timezone.text,
+      schedule_kind: manual ? "manual" : "cron", cron: cronExpression(), timezone: manual ? null : timezone.text,
       tools: tools.text, permission_mode: permissionMode || root.defaults.permission_mode || "bypassPermissions",
       mcp_config: null, env_passthrough: []}
   }
@@ -73,6 +75,7 @@ Column {
   }
   function preview() {
     previewTimer.stop()
+    if (manual) { previewText = "Runs only when you press Run now."; return }
     if (cronExpression() === "no days") { previewText = "Pick at least one day."; return }
     var params = {cron: cronExpression(), timezone: timezone.text}
     if (client.busy) { previewTimer.restart(); return }
@@ -162,6 +165,19 @@ Column {
       if (code === 0 && path !== "") sourceField.text = path
       root.reopenRequested()
       Qt.callLater(function() { sourceField.forceActiveFocus() })
+    }
+  }
+
+  // Omarchy's desktop folder chooser for the working folder.
+  Process {
+    id: folderChooser
+    command: ["omarchy-file-select", "--directory", "--title", "Working folder"]
+    stdout: StdioCollector { id: chosenFolder; waitForEnd: true }
+    onExited: function(code) {
+      var path = chosenFolder.text.trim()
+      if (code === 0 && path !== "") folder.text = path
+      root.reopenRequested()
+      Qt.callLater(function() { folder.forceActiveFocus() })
     }
   }
 
@@ -359,7 +375,7 @@ Column {
         objectName: "field_schedule"
         width: parent.width
         value: root.mode
-        options: ["Hourly", "Daily", "Weekly", "Custom time", "Custom repeat"]
+        options: ["Manual", "Hourly", "Daily", "Weekly", "Custom time", "Custom repeat"]
         onChanged: function(value) { root.mode = value; root.scheduleChanged() }
       }
     }
@@ -486,13 +502,27 @@ Column {
         width: parent.width
         spacing: Style.spacing.labelGap
         FieldLabel { text: "Working folder" }
-        TextField {
-          id: folder
-          objectName: "field_folder"
+        Row {
           width: parent.width
-          text: root.defaults.cwd || ""
-          Accessible.name: "Working folder"
-          onActiveFocusChanged: if (activeFocus) root.revealRequested(folder)
+          spacing: Style.space(6)
+          TextField {
+            id: folder
+            objectName: "field_folder"
+            width: parent.width - folderButton.width - parent.spacing
+            text: root.defaults.cwd || ""
+            Accessible.name: "Working folder"
+            onActiveFocusChanged: if (activeFocus) root.revealRequested(folder)
+          }
+          Button {
+            id: folderButton
+            objectName: "browseFolder"
+            iconText: "󰉋"
+            tooltipText: "Choose a folder"
+            focusable: true
+            bordered: true
+            enabled: !folderChooser.running
+            onClicked: folderChooser.running = true
+          }
         }
         Caption { text: "Claude Code starts in this folder and can change what is in it." }
       }
