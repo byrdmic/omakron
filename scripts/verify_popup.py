@@ -333,6 +333,7 @@ def verify_editor_flow(ipc, key, capture, *, out):
 
     edited = verify_edit_flow(ipc, key, capture, state, saved)
     verify_sourced_edit(ipc, key, capture, state, out / "skill" / "SKILL.md")
+    verify_delete_flow(ipc, key, capture, state, "Imported skill")
     (out / "editor-result.json").write_text(
         json.dumps(
             {
@@ -349,6 +350,7 @@ def verify_editor_flow(ipc, key, capture, *, out):
                     "edit reloads schedule, saves revision 2, Escape discards",
                     "schedule on then off from the routine view",
                     "imported routine edited as soon as it opens saves the typed minute",
+                    "delete asks first, Keep leaves the routine, Delete removes it",
                 ],
             },
             indent=2,
@@ -395,6 +397,30 @@ def verify_sourced_edit(ipc, key, capture, state, skill):
     assert imported()[0]["cron"] == "36 9 * * *" and imported()[0]["revision"] == 2, imported()
     assert state()["skill"] == "", state()
     capture("editor-sourced-edited")
+
+
+def verify_delete_flow(ipc, key, capture, state, name):
+    """Delete from the routine view: Keep leaves it, Delete removes it and returns to the list."""
+
+    def present():
+        return any(r["name"] == name for r in state()["routines"])
+
+    before = len(state()["routines"])
+    ipc("test", "openRoutine", name)
+    wait_until(lambda: state()["view"] == "routine")
+    ipc("test", "focus", "deleteRoutine")
+    key("Return")
+    capture("delete-ask")
+    ipc("test", "focus", "keepRoutine")
+    key("Return")
+    assert state()["view"] == "routine" and present(), state()
+    ipc("test", "focus", "deleteRoutine")
+    key("Return")
+    ipc("test", "focus", "confirmDelete")
+    key("Return")
+    wait_until(lambda: state()["view"] == "list" and not present())
+    assert len(state()["routines"]) == before - 1, state()["routines"]
+    capture("deleted")
 
 
 def verify_edit_flow(ipc, key, capture, state, saved):

@@ -272,3 +272,22 @@ def test_routine_snapshot_survives_later_routine_state(store, routine):
     )
     assert store.get_run(run.id).routine_snapshot["prompt"] == "Summarize the folder."
     assert store.get_run(run.id).routine_revision == 1
+
+
+def test_delete_hides_the_routine_cancels_queued_work_and_keeps_snapshots(store, routine):
+    queued, _ = store.enqueue_run(routine, trigger="manual", idempotency_key="q", deadline_s=10)
+    with pytest.raises(StoreError, match="reload"):
+        store.delete_routine(routine.id, expected_revision=routine.revision + 1)
+    deleted = store.delete_routine(routine.id, expected_revision=routine.revision)
+    assert deleted.deleted_at is not None and deleted.enabled is False
+    assert deleted.revision == routine.revision + 1
+    assert store.list_routines() == []
+    assert [r.id for r in store.list_routines(include_deleted=True)] == [routine.id]
+    canceled = store.get_run(queued.id)
+    assert canceled.status == "canceled"
+    assert canceled.problems == ["routine deleted before start"]
+    assert canceled.routine_snapshot["prompt"] == "Summarize the folder."
+    with pytest.raises(StoreError, match="deleted"):
+        store.enqueue_run(deleted, trigger="manual", idempotency_key="later", deadline_s=10)
+    with pytest.raises(StoreError, match="reload"):
+        store.delete_routine(routine.id, expected_revision=deleted.revision)
