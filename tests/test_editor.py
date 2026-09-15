@@ -164,5 +164,6 @@ def test_import_by_file_path_stores_that_path_and_the_default_zone_is_local(serv
     assert shown["file"] == str(file) and shown["source"] == str(file)
     defaults = service.request("editor_defaults")
     assert "skill_roots" not in defaults and "skills" not in defaults
+    assert defaults["cwd"] == service.env()["HOME"]  # the editor starts in the home folder
     assert defaults["timezone"]  # a zone name the evaluator accepts
     service.request("preview_schedule", {"cron": "0 9 * * *", "timezone": defaults["timezone"]})

@@ -40,3 +40,49 @@ function describe(cron) {
   }
   return names.join(", ") + " at " + at
 }
+
+// ---- run history wording -------------------------------------------------
+
+var OPEN = {"queued": true, "claimed": true, "running": true}
+var WORDS = {queued: "Queued", claimed: "Starting", running: "Running", succeeded: "Succeeded", failed: "Failed",
+  timed_out: "Timed out", canceled: "Canceled", interrupted: "Interrupted", skipped: "Skipped"}
+
+function isOpen(status) { return OPEN[status] === true }
+function statusWord(status) { return WORDS[status] || status || "" }
+
+// A UTC instant -> "Mon 15 Sep, 12:41 PM" in this machine's zone
+function moment(iso) {
+  if (!iso) return ""
+  var d = new Date(iso)
+  if (isNaN(d)) return iso
+  return Qt.formatDateTime(d, "ddd d MMM") + ", " + clock(d.getHours(), d.getMinutes())
+}
+
+// "just now", "4 min ago", "3 h ago", "yesterday", or the moment
+function relative(iso, nowMs) {
+  if (!iso) return ""
+  var d = new Date(iso)
+  if (isNaN(d)) return iso
+  var s = Math.max(0, Math.round(((nowMs || Date.now()) - d.getTime()) / 1000))
+  if (s < 60) return "just now"
+  if (s < 3600) return Math.round(s / 60) + " min ago"
+  if (s < 86400) return Math.round(s / 3600) + " h ago"
+  if (s < 172800) return "yesterday"
+  return moment(iso)
+}
+
+// seconds -> "12 s", "4 min 12 s", "1 h 5 min"
+function duration(seconds) {
+  if (seconds === null || seconds === undefined) return ""
+  var s = Math.round(seconds)
+  if (s < 60) return s + " s"
+  if (s < 3600) return Math.floor(s / 60) + " min " + (s % 60) + " s"
+  return Math.floor(s / 3600) + " h " + Math.floor((s % 3600) / 60) + " min"
+}
+
+// One line about a routine's most recent run
+function lastRun(run, nowMs) {
+  if (!run) return "Never run"
+  if (isOpen(run.status)) return statusWord(run.status) + "…"
+  return statusWord(run.status) + " · " + relative(run.ended_at || run.enqueued_at, nowMs)
+}

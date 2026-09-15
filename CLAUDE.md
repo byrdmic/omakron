@@ -1,5 +1,7 @@
 # CLAUDE.md
 
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
 Omakron is a native Omarchy bar plugin with a local Python service.
 It runs scheduled, Claude Code routines.
 
@@ -33,8 +35,9 @@ python -m omakron.checks manifest .
 ```
 
 Tests marked `slow` start the real service as a subprocess against the fake `claude` executable.
-The `service` and `service_factory` fixtures in tests/conftest.py provide that harness.
+The `service` and `service_factory` fixtures in tests/conftest.py provide that harness (tests/service_harness.py).
 Markers are strict, and xfail is strict.
+Migration tests load `tests/fixtures/schema-v*.sql` to build old databases.
 
 Native UI verification needs a disposable nested Omarchy session, not CI:
 
@@ -59,10 +62,12 @@ The repository root is the plugin folder the shell installs.
 Two halves talk over one user-only Unix socket.
 
 The QML half is `manifest.json` plus `ui/`.
-Widget.qml is the bar entry point and hosts RoutinesPanel.qml.
+Widget.qml is the bar entry point and hosts RoutinesPanel.qml, which loads RoutineEditor.qml as the create and edit form.
+ScheduleText.js holds the shared text helpers: cron descriptions, timestamps, durations, and status words.
 ServiceClient.qml spawns `python3 scripts/client.py request` for every call.
-It writes one JSON request to stdin and reads one JSON reply.
+It writes one JSON request (`op`, `params`) to stdin and reads one JSON reply; client exit status 3 means the service is unreachable.
 The popup never touches the database or the Claude CLI directly.
+tests/ui/shell.qml is the nested-shell harness that verify_popup.py drives.
 
 The Python half is `src/omakron/`, and the service is the only writer.
 A request flows client -> ipc -> service -> store, and runs flow scheduler or run_now -> store queue -> worker -> runner -> claude.
@@ -82,7 +87,8 @@ Each module has a docstring stating its contract. Read that first.
 - `manage.py` is the standard-library-only installer, backup, upgrade, rollback, and uninstall.
 - `checks.py` is the CLI that check.sh calls for the manifest check; it can also classify a saved stream-json transcript.
 
-Tests never call the real CLI. `tests/fake_claude.py` speaks enough `stream-json` to exercise the runner, and `FAKE_CLAUDE_MODE` selects its behavior.
+Tests never call the real CLI. `tests/fake_claude.py` speaks enough `stream-json` to exercise the runner, and `FAKE_CLAUDE_MODE` selects its behavior: `ok`, `error`, `tool`, `chatty`, `hang`, `slow`, `badmodel`.
+The service harness points the fake at `FAKE_CLAUDE_MODE_FILE` instead, so one running service can see several outcomes in sequence.
 `tests/conftest.py` provides a fake clock for schedule and deadline tests.
 Fixtures under `tests/fixtures/` include inputs built to fail. check.sh proves they still fail.
 
@@ -105,3 +111,10 @@ Preserve the expected failures of invalid fixtures unless the contract changes.
 Use synthetic data and neutral example paths in committed files.
 Keep execution logs, screenshots, and live run output outside the repository.
 Real Claude calls need an existing login and consume account usage. Only the smoke scripts make them.
+`scripts/smoke_scheduled.py` covers scheduled dispatch and restart without replay; `scripts/rehearse_install.py` rehearses the installer with real clones and isolated services.
+
+## Branches and releases
+
+One short-lived branch per change, squash-merged to `master` by pull request after CI passes.
+Land refactors and behavior changes in separate pull requests.
+Releases are annotated tags on `master` matching the version in `manifest.json` and `pyproject.toml`; bump both in the pull request that finishes the work.

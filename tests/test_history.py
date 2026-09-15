@@ -72,7 +72,7 @@ def test_retention_preview_keeps_failed_output_and_results(service):
     service.request("output_settings", {"retention_days": 1, "max_output_bytes": 4096})
     preview = service.request("prune_output")
     assert len(preview["files"]) == 2
-    assert all(name.startswith(success["id"]) for name in preview["files"])
+    assert all(success["id"] in name for name in preview["files"])
     assert (service.run_dir(success["id"]) / "stdout.jsonl").is_file()
     with pytest.raises(ServiceError, match="preview again"):
         service.request("prune_output", {"apply": True, "files": []})
@@ -133,3 +133,39 @@ def test_oversized_response_is_an_honest_error_and_dashboard_stays_usable(servic
         service.request("list_routines")
     assert error.value.code == "response_limit"
     assert len(service.request("dashboard")["routines"]) == 56
+
+
+def test_every_run_leaves_a_readable_log_in_the_chosen_folder(service, tmp_path):
+    logs = tmp_path / "chosen-logs"
+    saved = service.request("output_settings", {"log_dir": str(logs)})
+    assert saved["log_dir"] == str(logs) and saved["retention_days"] == 30
+    assert logs.is_dir()
+    run = service.run_now()["run"]
+    done = service.wait_run(run["id"])
+    assert done["status"] == "succeeded", done["problems"]
+    folder = logs / run["id"]
+    assert done["output_dir"] == str(folder)
+    text = (folder / "log.md").read_text(encoding="utf-8")
+    assert text.startswith("# Folder summary\n")
+    assert "- Status: succeeded" in text and "## Prompt" in text and "## Result" in text
+    assert done["result_text"] in text
+    detail = service.request("get_run", {"run_id": run["id"]})["run"]
+    assert detail["folder"] == str(folder) and detail["log"] == text
+    assert detail["duration_s"] is not None and detail["name"] == "Folder summary"
+    # Failed runs are logged too, and the failure names its cause.
+    service.set_mode("error")
+    failed = service.wait_run(service.run_now()["run"]["id"])
+    failed_text = (logs / failed["id"] / "log.md").read_text(encoding="utf-8")
+    assert "- Status: failed" in failed_text and "## Problems" in failed_text
+    # Retention never touches result.md or log.md, wherever the folder is.
+    service.request("output_settings", {"retention_days": 1})
+    assert service.request("output_settings")["log_dir"] == str(logs)
+    preview = service.request("prune_output")["files"]
+    assert all(name.endswith(("stdout.jsonl", "stderr.log")) for name in preview)
+    # Clearing the setting sends new runs back to the state folder.
+    assert service.request("output_settings", {"log_dir": ""})["log_dir"] is None
+    with pytest.raises(ServiceError):
+        service.request("output_settings", {"log_dir": "relative/logs"})
+    dashboard = service.request("dashboard")
+    assert dashboard["routines"][0]["latest_run"]["status"] == "failed"
+    assert "active_run" in dashboard

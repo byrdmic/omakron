@@ -384,7 +384,7 @@ class Service(history.HistoryApi):
 
     def op_editor_defaults(self, params: dict[str, Any]) -> dict[str, Any]:
         return {
-            "cwd": str(self.workdir / "routines"),
+            "cwd": str(Path.home()),
             "model": DEFAULT_MODEL,
             "timezone": local_timezone(),
             "tools": DEFAULT_TOOLS,
