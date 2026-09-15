@@ -88,11 +88,15 @@ def test_upcoming_is_chronological_and_all_includes_paused(service):
     routine = service.request("create_routine", draft(service))["routine"]
     dashboard = service.request("dashboard")
     assert len(dashboard["routines"]) == 2 and not dashboard["upcoming"]
+    assert all(row["next_run_at"] is None for row in dashboard["routines"])
     service.request(
         "set_enabled", {"routine_id": routine["id"], "expected_revision": 1, "enabled": True}
     )
-    upcoming = service.request("dashboard")["upcoming"]
+    dashboard = service.request("dashboard")
+    upcoming = dashboard["upcoming"]
     assert len(upcoming) == 5
+    enabled = next(row for row in dashboard["routines"] if row["id"] == routine["id"])
+    assert enabled["next_run_at"] == upcoming[0]["utc"]
     assert upcoming == sorted(upcoming, key=lambda row: row["utc"])
     assert all(dt.datetime.fromisoformat(row["utc"]).tzinfo for row in upcoming)
 

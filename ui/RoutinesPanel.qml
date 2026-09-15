@@ -36,7 +36,7 @@ Panel {
   readonly property string sampleState: setting("sampleState", "")
   readonly property bool samples: sampleState !== ""
   readonly property var sampleRows: [
-    {name: "Morning repository report", schedule_kind: "cron", cron: "0 9 * * 1-5", timezone: "UTC", enabled: true, latest_run: null},
+    {name: "Morning repository report", schedule_kind: "cron", cron: "0 9 * * 1-5", timezone: "UTC", enabled: true, latest_run: null, next_run_at: new Date(Date.now() + 3 * 60000).toISOString()},
     {name: "Folder summary", schedule_kind: "manual", cron: null, timezone: null, latest_run: null}
   ]
   readonly property var rows: samples ? (sampleState === "ready" ? sampleRows : []) : routines
@@ -127,6 +127,13 @@ Panel {
   }
   onOpenedChanged: if (opened) { nowMs = Date.now(); refresh() }
 
+  // Keep the relative times honest while the popup stays open.
+  Timer {
+    interval: 30000
+    repeat: true
+    running: root.opened
+    onTriggered: root.nowMs = Date.now()
+  }
   // Live updates while something is running.
   Timer {
     interval: 2000
@@ -376,6 +383,7 @@ Panel {
                         spacing: Style.space(2)
                         Body { width: parent.width; text: row.modelData.name; elide: Text.ElideRight; wrapMode: Text.NoWrap }
                         Caption { width: parent.width; text: root.scheduleText(row.modelData) }
+                        Caption { width: parent.width; visible: text !== ""; text: ScheduleText.nextRun(row.modelData, root.nowMs) }
                         Row {
                           spacing: Style.space(6)
                           Dot { status: row.modelData.latest_run ? row.modelData.latest_run.status : ""; anchors.verticalCenter: parent.verticalCenter }
@@ -447,6 +455,10 @@ Panel {
                   enabled: !root.samples && root.connected && !bridge.busy
                   onClicked: root.setEnabled(root.routine, !root.routine.enabled)
                 }
+              }
+              Caption {
+                visible: text !== ""
+                text: ScheduleText.nextRun(root.routine, root.nowMs)
               }
               Caption {
                 visible: root.routine && root.routine.source ? true : false

@@ -255,10 +255,13 @@ class HistoryApi:
             item.pop("prompt")
             latest = store.list_runs(routine_id=routine.id, limit=1)
             item["latest_run"] = summary(latest[0]) if latest else None
+            item["next_run_at"] = None
             routines.append(item)
             if routine.enabled and routine.schedule_kind == "cron":
                 schedule = Schedule(routine.cron, routine.timezone)
-                for instant in schedule.preview(now):
+                times = schedule.preview(now)
+                item["next_run_at"] = times[0].isoformat()
+                for instant in times:
                     local = instant.astimezone(schedule.zone).isoformat()
                     upcoming.append(
                         dict(item, utc=instant.isoformat(), local=local, day=local[:10])

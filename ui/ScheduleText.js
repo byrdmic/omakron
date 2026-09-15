@@ -71,6 +71,33 @@ function relative(iso, nowMs) {
   return moment(iso)
 }
 
+// A UTC instant ahead of now -> "in under a minute", "in 3 min", "in 2 h 15 min",
+// "tomorrow, 9:00 AM", or the moment
+function until(iso, nowMs) {
+  if (!iso) return ""
+  var d = new Date(iso)
+  if (isNaN(d)) return iso
+  var now = new Date(nowMs || Date.now())
+  var s = Math.round((d.getTime() - now.getTime()) / 1000)
+  if (s < 60) return "in under a minute"
+  if (s < 3600) return "in " + Math.round(s / 60) + " min"
+  if (s < 86400) {
+    var h = Math.floor(s / 3600), m = Math.round((s % 3600) / 60)
+    if (m === 60) { h += 1; m = 0 }
+    return "in " + h + " h" + (m > 0 ? " " + m + " min" : "")
+  }
+  var tomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1)
+  if (d.getFullYear() === tomorrow.getFullYear() && d.getMonth() === tomorrow.getMonth() && d.getDate() === tomorrow.getDate())
+    return "tomorrow, " + clock(d.getHours(), d.getMinutes())
+  return moment(iso)
+}
+
+// "Next run: in 3 min" for a cron routine whose schedule is on, else ""
+function nextRun(routine, nowMs) {
+  if (!routine || routine.schedule_kind !== "cron" || !routine.enabled || !routine.next_run_at) return ""
+  return "Next run: " + until(routine.next_run_at, nowMs)
+}
+
 // seconds -> "12 s", "4 min 12 s", "1 h 5 min"
 function duration(seconds) {
   if (seconds === null || seconds === undefined) return ""
