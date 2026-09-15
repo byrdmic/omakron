@@ -72,6 +72,8 @@ Panel {
   function openRun(summary) {
     run = summary
     view = "run"
+    showPrompt = false
+    showLog = false
     if (!samples) bridge.request("get_run", {run_id: summary.id})
   }
   function openSettings() {
@@ -542,11 +544,55 @@ Panel {
                   onClicked: opener.running = true
                 }
                 Button {
+                  text: root.showPrompt ? "Hide prompt" : "Show prompt"
+                  iconText: root.showPrompt ? "󰅃" : "󰅀"
+                  focusable: true
+                  visible: root.runPrompt !== ""
+                  onClicked: root.showPrompt = !root.showPrompt
+                }
+                Button {
                   text: root.showLog ? "Hide log" : "Show log"
                   iconText: root.showLog ? "󰅃" : "󰅀"
                   focusable: true
                   visible: root.run && root.run.log ? true : false
                   onClicked: root.showLog = !root.showLog
+                }
+              }
+              Column {
+                width: parent.width
+                visible: root.showPrompt && root.runPrompt !== ""
+                spacing: Style.spacing.labelGap
+                Caption { text: root.run && root.run.routine_snapshot && root.run.routine_snapshot.source ? "Prompt, as read from the skill file at launch" : "Prompt"; font.bold: true }
+                BorderSurface {
+                  id: promptFrame
+                  width: parent.width
+                  height: Math.min(Style.space(260), promptText.implicitHeight + Style.space(16))
+                  radius: Style.cornerRadius
+                  readonly property var spec: Border.controlSpec("normal", Color.foreground, Color.accent)
+                  color: Style.controlFill(false, false, Color.foreground, Color.accent)
+                  borderSpec: spec
+                  Controls.ScrollView {
+                    anchors.fill: parent
+                    anchors.margins: Border.top(promptFrame.spec)
+                    clip: true
+                    Controls.TextArea {
+                      id: promptText
+                      readOnly: true
+                      text: root.runPrompt
+                      wrapMode: TextEdit.Wrap
+                      selectByMouse: true
+                      color: Color.foreground
+                      selectionColor: Style.selectionFillFor(Color.foreground, Color.accent)
+                      selectedTextColor: Color.foreground
+                      font.family: Style.font.family
+                      font.pixelSize: Style.font.body
+                      leftPadding: Style.spacing.controlPaddingX
+                      rightPadding: Style.spacing.controlPaddingX
+                      topPadding: Style.spacing.inputPaddingY
+                      bottomPadding: Style.spacing.inputPaddingY
+                      background: null
+                    }
+                  }
                 }
               }
               BorderSurface {
@@ -633,6 +679,9 @@ Panel {
   }
 
   property bool showLog: false
+  property bool showPrompt: false
+  // The prompt text the run actually sent. Empty until the detail reply arrives.
+  readonly property string runPrompt: run && run.routine_snapshot && run.routine_snapshot.prompt ? run.routine_snapshot.prompt : ""
 
   // A status dot. An open run breathes: a slow, gentle fade, nothing that flashes.
   component Dot: Rectangle {
