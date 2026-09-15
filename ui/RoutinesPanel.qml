@@ -21,6 +21,7 @@ Panel {
   property var defaults: ({})
   property var settings: ({})
   property bool connected: false
+  property bool dispatchEnabled: true  // the service dispatches scheduled runs at all; off after install or upgrade
   property bool loaded: false
   property bool editing: false
   property var editTarget: null  // the routine the editor is changing, or null when creating
@@ -86,6 +87,13 @@ Panel {
     error = ""
     bridge.request("set_enabled", {routine_id: target.id, expected_revision: target.revision, enabled: enabled})
   }
+  // Resume or stop scheduled dispatch for every routine. The installer
+  // turns it off after an install or upgrade; resuming never catches up.
+  function setDispatch(enabled) {
+    if (samples || bridge.busy) return
+    error = ""
+    bridge.request("set_dispatch", {enabled: enabled})
+  }
   function openRoutine(target) {
     routine = target
     runs = []
@@ -150,6 +158,7 @@ Panel {
       else if (op === "dashboard") {
         root.routines = data.routines
         root.settings = data.output_settings
+        root.dispatchEnabled = data.dispatch_enabled !== false
         root.loaded = true
         root.error = ""
         if (root.view === "routine" && root.routine) {
@@ -164,6 +173,7 @@ Panel {
       else if (op === "get_run") root.run = data.run
       else if (op === "get_routine") { root.editTarget = data.routine; root.editing = true }
       else if (op === "set_enabled") { root.routine = data.routine; bridge.request("dashboard", {}) }
+      else if (op === "set_dispatch") { root.dispatchEnabled = data.dispatch_enabled !== false; bridge.request("dashboard", {}) }
       else if (op === "run_now") { root.nowMs = Date.now(); bridge.request("dashboard", {}) }
       else if (op === "output_settings") {
         root.settings = data
@@ -338,6 +348,29 @@ Panel {
               color: Color.urgent
             }
 
+            // Global dispatch is off, so no routine runs on its schedule.
+            // Shown wherever a schedule is shown, with the one action that fixes it.
+            Column {
+              width: parent.width
+              visible: !root.samples && root.loaded && root.connected && !root.dispatchEnabled
+                && (root.view === "list" || root.view === "routine")
+              spacing: Style.space(6)
+              Body {
+                text: "Scheduled runs are off, so no routine runs on its own. Run now still works."
+                color: Color.urgent
+              }
+              Button {
+                objectName: "resumeDispatch"
+                text: "Turn on scheduled runs"
+                iconText: "󰥔"
+                tooltipText: "Resume scheduled runs from now. Missed times are skipped."
+                focusable: true
+                bordered: true
+                enabled: !bridge.busy
+                onClicked: root.setDispatch(true)
+              }
+            }
+
             // ---------------------------------------------------------- list
             Column {
               width: parent.width
@@ -383,7 +416,7 @@ Panel {
                         spacing: Style.space(2)
                         Body { width: parent.width; text: row.modelData.name; elide: Text.ElideRight; wrapMode: Text.NoWrap }
                         Caption { width: parent.width; text: root.scheduleText(row.modelData) }
-                        Caption { width: parent.width; visible: text !== ""; text: ScheduleText.nextRun(row.modelData, root.nowMs) }
+                        Caption { width: parent.width; visible: text !== ""; text: root.dispatchEnabled ? ScheduleText.nextRun(row.modelData, root.nowMs) : "" }
                         Row {
                           spacing: Style.space(6)
                           Dot { status: row.modelData.latest_run ? row.modelData.latest_run.status : ""; anchors.verticalCenter: parent.verticalCenter }
@@ -458,7 +491,7 @@ Panel {
               }
               Caption {
                 visible: text !== ""
-                text: ScheduleText.nextRun(root.routine, root.nowMs)
+                text: root.dispatchEnabled ? ScheduleText.nextRun(root.routine, root.nowMs) : ""
               }
               Caption {
                 visible: root.routine && root.routine.source ? true : false

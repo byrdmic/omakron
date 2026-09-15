@@ -212,6 +212,42 @@ def test_execution_choices_are_saved_and_snapshotted(store, tmp_path):
     assert store.get_run(run.id).routine_snapshot["tools"] == "Bash,Edit,Read"
 
 
+def test_a_new_time_turns_the_schedule_on_and_other_edits_keep_it(store, tmp_path):
+    routine = store.create_routine(
+        name="Report",
+        prompt="Original",
+        model="claude-sonnet-5",
+        cwd=str(tmp_path),
+        schedule_kind="cron",
+        cron="53 16 * * 1-5",
+        timezone="America/New_York",
+        enabled=True,
+    )
+    edited = store.update_routine(
+        routine.id, routine.revision, dict(routine.to_dict(), prompt="Changed")
+    )
+    assert edited.enabled
+    off = store.set_enabled(edited.id, edited.revision, False)
+    renamed = store.update_routine(off.id, off.revision, dict(off.to_dict(), name="Renamed"))
+    assert not renamed.enabled
+    retimed = store.update_routine(
+        renamed.id, renamed.revision, dict(renamed.to_dict(), cron="0 9 * * 1-5")
+    )
+    assert retimed.enabled and retimed.cron == "0 9 * * 1-5"
+    manual = store.update_routine(
+        retimed.id,
+        retimed.revision,
+        dict(retimed.to_dict(), schedule_kind="manual", cron=None, timezone=None),
+    )
+    assert not manual.enabled
+    back = store.update_routine(
+        manual.id,
+        manual.revision,
+        dict(manual.to_dict(), schedule_kind="cron", cron="0 9 * * *", timezone="UTC"),
+    )
+    assert back.enabled
+
+
 def test_result_text_is_kept_and_bounded(store, routine):
     run, _ = store.enqueue_run(routine, trigger="manual", idempotency_key=None, deadline_s=10)
     store.finish_run(run.id, status="succeeded", problems=[], result_text="x" * 70_000)

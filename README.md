@@ -115,10 +115,10 @@ PYTHONPATH=src python scripts/smoke_vertical_slice.py --out /path/to/scratch
 
 ## Scheduling controls
 
-Saved cron routines start paused. Enable the saved policy from the details
-view to authorize recurring runs. Saving an edit pauses future
-runs. Pause leaves active work alone and removes queued scheduled work.
-Resume schedules the next future occurrence without catch-up.
+Saving a routine with a time turns its schedule on. Saving a new time on a
+routine that was turned off turns it back on; other edits keep it as it was.
+Pause from the routine view leaves active work alone and removes queued
+scheduled work. Resume schedules the next future occurrence without catch-up.
 
 The service skips missed occurrences beyond 60 seconds, prevents same-routine
 overlap, and expires queued work after five minutes. Checkpoints and local-slot

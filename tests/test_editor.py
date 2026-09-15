@@ -25,7 +25,7 @@ def test_create_and_reopen_schedule_identically(service):
     routine = service.request("create_routine", expected)["routine"]
     service.restart()
     saved = service.request("get_routine", {"routine_id": routine["id"]})["routine"]
-    assert not saved["enabled"] and saved["revision"] == 1
+    assert saved["enabled"] and saved["revision"] == 1
     assert {key: saved[key] for key in expected} == expected
 
 
@@ -63,8 +63,33 @@ def test_conflicting_edit_preserves_latest_accepted_revision(service):
             dict(original, name="Stale draft", routine_id=saved["id"], expected_revision=1),
         )
     assert error.value.code == "conflict"
-    assert updated["revision"] == 2 and not updated["enabled"]
+    assert updated["revision"] == 2 and updated["enabled"]
     assert service.request("get_routine", {"routine_id": saved["id"]})["routine"] == updated
+
+
+def test_setting_a_new_time_turns_the_schedule_on(service):
+    original = draft(service)
+    saved = service.request("create_routine", original)["routine"]
+    off = service.request(
+        "set_enabled", {"routine_id": saved["id"], "expected_revision": 1, "enabled": False}
+    )["routine"]
+    renamed = service.request(
+        "update_routine",
+        dict(original, name="Renamed", routine_id=saved["id"], expected_revision=off["revision"]),
+    )["routine"]
+    assert not renamed["enabled"]
+    edited = service.request(
+        "update_routine",
+        dict(
+            original,
+            cron="53 16 * * 1-5",
+            routine_id=saved["id"],
+            expected_revision=renamed["revision"],
+        ),
+    )["routine"]
+    assert edited["enabled"] and edited["cron"] == "53 16 * * 1-5"
+    row = next(r for r in service.request("dashboard")["routines"] if r["id"] == saved["id"])
+    assert row["next_run_at"] is not None
 
 
 def test_preview_uses_the_lab_evaluator_for_dst(service):

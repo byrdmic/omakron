@@ -750,7 +750,7 @@ Column {
   Caption {
     visible: root.step === "edit"
     text: (root.defaults.policy || "Claude Code runs with its usual tools and no permission prompts.")
-      + (root.revising ? " Saving turns the schedule off until you turn it back on. A run already started finishes." : " New routines start with the schedule off so you can review them first.")
+      + (root.manual ? "" : " Saving with a time turns the schedule on. Turn it off from the routine view.")
   }
   Caption { text: root.error; visible: text !== ""; color: Color.urgent }
 

@@ -109,13 +109,12 @@ def test_edit_running_keeps_snapshot_and_next_run_uses_new_revision(lab):
     active = scheduler.tick(now[0])[0]
     store.claim_next("worker")
     changed = store.update_routine(r.id, r.revision, dict(r.to_dict(), prompt="Changed"))
-    assert not changed.enabled
+    assert changed.enabled
     assert store.get_run(active).routine_snapshot["prompt"] == "Original"
-    resumed = store.set_enabled(r.id, changed.revision, True)
     store.finish_run(active, status="succeeded", problems=[])
     now[0] += dt.timedelta(minutes=1)
     next_run = store.get_run(scheduler.tick(now[0])[0])
-    assert next_run.routine_revision == resumed.revision
+    assert next_run.routine_revision == changed.revision
     assert next_run.routine_snapshot["prompt"] == "Changed"
 
 

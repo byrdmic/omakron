@@ -87,17 +87,17 @@ def test_retention_preview_keeps_failed_output_and_results(service):
 def test_upcoming_is_chronological_and_all_includes_paused(service):
     routine = service.request("create_routine", draft(service))["routine"]
     dashboard = service.request("dashboard")
-    assert len(dashboard["routines"]) == 2 and not dashboard["upcoming"]
-    assert all(row["next_run_at"] is None for row in dashboard["routines"])
-    service.request(
-        "set_enabled", {"routine_id": routine["id"], "expected_revision": 1, "enabled": True}
-    )
-    dashboard = service.request("dashboard")
     upcoming = dashboard["upcoming"]
-    assert len(upcoming) == 5
+    assert len(dashboard["routines"]) == 2 and len(upcoming) == 5
     enabled = next(row for row in dashboard["routines"] if row["id"] == routine["id"])
     assert enabled["next_run_at"] == upcoming[0]["utc"]
     assert upcoming == sorted(upcoming, key=lambda row: row["utc"])
+    service.request(
+        "set_enabled", {"routine_id": routine["id"], "expected_revision": 1, "enabled": False}
+    )
+    dashboard = service.request("dashboard")
+    assert not dashboard["upcoming"]
+    assert all(row["next_run_at"] is None for row in dashboard["routines"])
     assert all(dt.datetime.fromisoformat(row["utc"]).tzinfo for row in upcoming)
 
 

@@ -42,7 +42,8 @@ python scripts/manage.py enable-widget --apply
 The widget appears after Agents in the right bar.
 Other shell entries keep their values and order.
 The service seeds the manual example routine without enabling recurrence.
-Scheduled routines need their saved policy enabled and global dispatch resumed.
+Scheduled routines need their schedule turned on and global dispatch resumed.
+The popup shows a "Turn on scheduled runs" button while dispatch is off.
 
 The generated unit lives at $XDG_CONFIG_HOME/systemd/user/omakron.service.
 The reference unit in packaging/ is explanatory and is not copied verbatim.

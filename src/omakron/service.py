@@ -333,10 +333,9 @@ class Service(history.HistoryApi):
             raise ApiError("bad_request", str(exc)) from exc
 
     def op_create_routine(self, params: dict[str, Any]) -> dict[str, Any]:
-        if params.get("enabled", False) is not False:
-            raise ApiError("bad_request", "new routines start paused; review before enabling")
+        """A routine saved with a time starts on; a manual one runs only when asked."""
         draft = self._validated_draft(params)
-        routine = self._store().create_routine(**draft)
+        routine = self._store().create_routine(**draft, enabled=draft["schedule_kind"] == "cron")
         return {"routine": routine.to_dict()}
 
     def op_update_routine(self, params: dict[str, Any]) -> dict[str, Any]:

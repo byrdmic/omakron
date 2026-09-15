@@ -461,7 +461,7 @@ class Store:
         source: str | None = None,
         routine_id: str | None = None,
     ) -> Routine:
-        """Create a routine at revision 1. New routines start paused by default."""
+        """Create a routine at revision 1. The caller says whether its schedule starts on."""
         if schedule_kind == "manual" and (cron or timezone):
             raise StoreError("a manual routine has no cron expression or timezone")
         if schedule_kind == "cron":
@@ -507,7 +507,10 @@ class Store:
     def update_routine(self, routine_id: str, expected_revision: int, draft: dict) -> Routine:
         """Accept the whole validated draft only if the caller's revision is current.
 
-        Saving pauses future dispatch. Existing run snapshots remain unchanged.
+        Setting a new time or timezone turns the schedule on. Otherwise a cron
+        routine keeps its schedule on or off as it was, and switching to manual
+        turns it off. Queued scheduled work is dropped so the next occurrence
+        uses the new draft. Existing run snapshots remain unchanged.
         """
         fields = (
             "name",
@@ -536,12 +539,22 @@ class Store:
                     "routine changed; reload the accepted revision or reapply your draft"
                 )
             self.skip_scheduled_queue(routine_id, "routine edited before start")
+            new_time = (current.cron, current.timezone) != (values["cron"], values["timezone"])
+            enabled = values["schedule_kind"] == "cron" and (current.enabled or new_time)
+            now = utc_now()
             assignments = ", ".join(f"{field} = ?" for field in fields)
             self.conn.execute(
                 f"UPDATE routines SET {assignments}, revision = revision + 1,"  # noqa: S608 - fixed field names
-                " enabled = 0, updated_at = ? WHERE id = ? AND revision = ?",
-                (*[values[field] for field in fields], utc_now(), routine_id, expected_revision),
+                " enabled = ?, updated_at = ? WHERE id = ? AND revision = ?",
+                (
+                    *[values[field] for field in fields],
+                    int(enabled),
+                    now,
+                    routine_id,
+                    expected_revision,
+                ),
             )
+            self._advance_checkpoint(routine_id, now, resumed=enabled and not current.enabled)
         return self.get_routine(routine_id)
 
     def delete_routine(self, routine_id: str, expected_revision: int) -> Routine:
@@ -583,6 +596,25 @@ class Store:
             (utc_now(), json.dumps([reason]), routine_id),
         )
 
+    def _advance_checkpoint(self, routine_id: str, now: str, *, resumed: bool) -> None:
+        """Move the schedule checkpoint to now. A resume records the skipped interval."""
+        previous = self.conn.execute(
+            "SELECT checkpoint FROM schedule_state WHERE routine_id=?", (routine_id,)
+        ).fetchone()
+        checkpoint = now
+        if previous:
+            checkpoint = max(previous["checkpoint"], now)
+            if resumed and previous["checkpoint"] < now:
+                self.conn.execute(
+                    "INSERT INTO schedule_gaps(routine_id,start_at,end_at,reason) VALUES(?,?,?,?)",
+                    (routine_id, previous["checkpoint"], now, "resume skips missed occurrences"),
+                )
+        self.conn.execute(
+            "INSERT INTO schedule_state(routine_id,checkpoint) VALUES(?,?)"
+            " ON CONFLICT(routine_id) DO UPDATE SET checkpoint=excluded.checkpoint",
+            (routine_id, checkpoint),
+        )
+
     def set_enabled(self, routine_id: str, expected_revision: int, enabled: bool) -> Routine:
         with self._tx():
             current = self.get_routine(routine_id)
@@ -596,28 +628,7 @@ class Store:
                 "UPDATE routines SET enabled=?, revision=revision+1, updated_at=? WHERE id=?",
                 (int(enabled), now, routine_id),
             )
-            previous = self.conn.execute(
-                "SELECT checkpoint FROM schedule_state WHERE routine_id=?", (routine_id,)
-            ).fetchone()
-            checkpoint = now
-            if previous:
-                checkpoint = max(previous["checkpoint"], now)
-                if enabled and previous["checkpoint"] < now:
-                    self.conn.execute(
-                        "INSERT INTO schedule_gaps(routine_id,start_at,end_at,reason)"
-                        " VALUES(?,?,?,?)",
-                        (
-                            routine_id,
-                            previous["checkpoint"],
-                            now,
-                            "resume skips missed occurrences",
-                        ),
-                    )
-            self.conn.execute(
-                "INSERT INTO schedule_state(routine_id,checkpoint) VALUES(?,?)"
-                " ON CONFLICT(routine_id) DO UPDATE SET checkpoint=excluded.checkpoint",
-                (routine_id, checkpoint),
-            )
+            self._advance_checkpoint(routine_id, now, resumed=enabled)
         return self.get_routine(routine_id)
 
     # --------------------------------------------------------------------- runs
