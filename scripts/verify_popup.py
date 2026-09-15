@@ -101,6 +101,9 @@ def verify(out: Path, live_editor: bool = False, plugin: Path = REPO):  # noqa: 
             wait_until((runtime / "wayland-1").exists)
             env["WAYLAND_DISPLAY"] = "wayland-1"
             env["HYPRLAND_INSTANCE_SIGNATURE"] = next((runtime / "hypr").iterdir()).name
+            # The popup disables "New routine" while the service is unreachable, so
+            # the keyboard checks need a real service. It runs against the fake CLI.
+            start_service(env, scratch=scratch, out=out, processes=processes)
             with (out / "shell.log").open("w") as log:
                 processes.append(
                     subprocess.Popen(
@@ -142,9 +145,10 @@ def verify(out: Path, live_editor: bool = False, plugin: Path = REPO):  # noqa: 
 
             ipc("test", "open")
             wait_until(lambda: json.loads(ipc("test", "inspect"))["omakron"])
+            wait_until(lambda: json.loads(ipc("test", "editorState"))["connected"])
             time.sleep(0.3)
             capture("scale-100")
-            key("Tab")
+            # The panel focuses "New routine" on open, so Return alone starts a draft.
             key("Return")
             assert json.loads(ipc("omakron.routines", "state"))["editing"]
             capture("editor-empty")
@@ -184,9 +188,7 @@ def verify(out: Path, live_editor: bool = False, plugin: Path = REPO):  # noqa: 
                 ipc("test", "open")
                 capture("edge-" + position)
             if live_editor:
-                verify_editor_flow(
-                    ipc, key, capture, env=env, scratch=scratch, out=out, processes=processes
-                )
+                verify_editor_flow(ipc, key, capture, out=out)
             errors = (out / "shell.log").read_text()
             unexpected = [
                 line
@@ -205,7 +207,7 @@ def verify(out: Path, live_editor: bool = False, plugin: Path = REPO):  # noqa: 
                         "omarchy": run(["omarchy", "version"], env).stdout.strip(),
                         "checks": [
                             "native bar anchor",
-                            "keyboard Tab/Enter opens the editor",
+                            "keyboard Enter opens the editor",
                             "Escape closes editor then panel",
                             "launcher retains focus target",
                             "toggle reopens",
@@ -237,8 +239,8 @@ def verify(out: Path, live_editor: bool = False, plugin: Path = REPO):  # noqa: 
                         process.wait(timeout=5)
 
 
-def verify_editor_flow(ipc, key, capture, *, env, scratch, out, processes):
-    """Use the actual editor, socket client, and service in temporary state."""
+def start_service(env, *, scratch, out, processes):
+    """Run the real service in temporary state, pointed at the fake ``claude``."""
     service_env = dict(env, PYTHONPATH=str(REPO / "src"))
     config = scratch / "service-config"
     config.mkdir()
@@ -267,6 +269,10 @@ def verify_editor_flow(ipc, key, capture, *, env, scratch, out, processes):
         )
     processes.append(process)
     wait_until((Path(env["XDG_RUNTIME_DIR"]) / "omakron/service.sock").exists)
+
+
+def verify_editor_flow(ipc, key, capture, *, out):
+    """Use the actual editor and socket client against the service started earlier."""
     ipc("test", "position", "top")
     ipc("test", "state", "")
     ipc("test", "open")
