@@ -328,6 +328,7 @@ def verify_editor_flow(ipc, key, capture, *, out):
                     "invalid draft retained",
                     "save paused",
                     "edit reloads schedule, saves revision 2, Escape discards",
+                    "resume then pause from the routine view",
                 ],
             },
             indent=2,
@@ -366,6 +367,18 @@ def verify_edit_flow(ipc, key, capture, state, saved):
     key("Escape")
     assert not state()["editing"] and state()["view"] == "routine"
     assert all(r["name"] != "Discard this edit" for r in state()["routines"])
+
+    # Resume the paused routine from its view, then pause it again.
+    def enabled():
+        return [r["enabled"] for r in state()["routines"] if r["id"] == saved["id"]][0]
+
+    ipc("test", "focus", "toggleEnabled")
+    key("Return")
+    wait_until(enabled)
+    capture("routine-resumed")
+    ipc("test", "focus", "toggleEnabled")
+    key("Return")
+    wait_until(lambda: not enabled())
     return edited
 
 

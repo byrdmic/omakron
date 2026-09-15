@@ -36,7 +36,7 @@ Panel {
   readonly property string sampleState: setting("sampleState", "")
   readonly property bool samples: sampleState !== ""
   readonly property var sampleRows: [
-    {name: "Morning repository report", schedule_kind: "cron", cron: "0 9 * * 1-5", timezone: "UTC", latest_run: null},
+    {name: "Morning repository report", schedule_kind: "cron", cron: "0 9 * * 1-5", timezone: "UTC", enabled: true, latest_run: null},
     {name: "Folder summary", schedule_kind: "manual", cron: null, timezone: null, latest_run: null}
   ]
   readonly property var rows: samples ? (sampleState === "ready" ? sampleRows : []) : routines
@@ -78,6 +78,14 @@ Panel {
     error = ""
     bridge.request("run_now", {routine_id: target.id, idempotency_key: "popup:" + target.id + ":" + Date.now()})
   }
+  // Resume or pause a cron routine. Resume schedules the next occurrence
+  // with no catch-up; pause drops queued scheduled work and leaves a run
+  // already started alone.
+  function setEnabled(target, enabled) {
+    if (samples || bridge.busy || !target) return
+    error = ""
+    bridge.request("set_enabled", {routine_id: target.id, expected_revision: target.revision, enabled: enabled})
+  }
   function openRoutine(target) {
     routine = target
     runs = []
@@ -108,7 +116,8 @@ Panel {
     backButton.visible ? backButton.forceActiveFocus() : newRoutine.forceActiveFocus()
   }
   function scheduleText(target) {
-    var when = target.schedule_kind === "manual" ? "Runs when you ask" : ScheduleText.describe(target.cron)
+    var when = target.schedule_kind === "manual" ? "Runs when you ask"
+        : (target.enabled ? "" : "Paused · ") + ScheduleText.describe(target.cron)
     return target.source ? when + " · from a skill file" : when
   }
   function statusColor(status) {
@@ -147,6 +156,7 @@ Panel {
       }
       else if (op === "get_run") root.run = data.run
       else if (op === "get_routine") { root.editTarget = data.routine; root.editing = true }
+      else if (op === "set_enabled") { root.routine = data.routine; bridge.request("dashboard", {}) }
       else if (op === "run_now") { root.nowMs = Date.now(); bridge.request("dashboard", {}) }
       else if (op === "output_settings") {
         root.settings = data
@@ -425,6 +435,17 @@ Panel {
                   bordered: true
                   enabled: !root.samples && root.connected && !bridge.busy
                   onClicked: root.startEdit(root.routine)
+                }
+                Button {
+                  objectName: "toggleEnabled"
+                  visible: root.routine && root.routine.schedule_kind === "cron" ? true : false
+                  text: root.routine && root.routine.enabled ? "Pause" : "Resume"
+                  iconText: root.routine && root.routine.enabled ? "󰏤" : "󰥔"
+                  tooltipText: root.routine && root.routine.enabled ? "Stop scheduled runs" : "Start scheduled runs"
+                  focusable: true
+                  bordered: true
+                  enabled: !root.samples && root.connected && !bridge.busy
+                  onClicked: root.setEnabled(root.routine, !root.routine.enabled)
                 }
                 Caption {
                   anchors.verticalCenter: parent.verticalCenter
