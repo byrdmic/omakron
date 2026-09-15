@@ -46,6 +46,10 @@ ShellRoot {
       var item = findItem(root.panel(), name)
       if (item) item.text = value
     }
+    function openRoutine(name: string): void {
+      var p = root.panel()
+      for (var i = 0; i < p.routines.length; ++i) if (p.routines[i].name === name) p.openRoutine(p.routines[i])
+    }
     function editor(mode: string): void {
       var item = findItem(root.panel(), "routineEditor")
       if (item) { item.mode = mode; item.preview() }
@@ -53,8 +57,8 @@ ShellRoot {
     function editorState(): string {
       var p = root.panel()
       var e = findItem(p, "routineEditor")
-      return JSON.stringify({editing: p.editing, connected: p.connected, routines: p.routines,
-        error: e ? e.error : p.error, preview: e ? e.previewText : ""})
+      return JSON.stringify({editing: p.editing, connected: p.connected, routines: p.routines, view: p.view,
+        error: e ? e.error : p.error, preview: e ? e.previewText : "", mode: e ? e.mode : ""})
     }
     function inspect(): string {
       var widget = bar.findPanelWidget("omakron.routines")

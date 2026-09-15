@@ -23,6 +23,7 @@ Panel {
   property bool connected: false
   property bool loaded: false
   property bool editing: false
+  property var editTarget: null  // the routine the editor is changing, or null when creating
   property string view: "list"  // list, routine, run, settings
   property var routine: null  // the routine open in the routine view
   property var runs: []
@@ -56,7 +57,21 @@ Panel {
   }
   function startNew() {
     error = ""
+    editTarget = null
     editing = true
+  }
+  // The dashboard rows leave the prompt out, so the editor opens on the full
+  // routine from get_routine. That reply also carries the current revision.
+  function startEdit(target) {
+    if (samples || bridge.busy || !target) return
+    error = ""
+    bridge.request("get_routine", {routine_id: target.id})
+  }
+  // Leave the editor and put focus back where it came from.
+  function stopEditing() {
+    editing = false
+    editTarget = null
+    view === "list" ? newRoutine.forceActiveFocus() : backButton.forceActiveFocus()
   }
   function runNow(target) {
     if (samples || bridge.busy) return
@@ -131,6 +146,7 @@ Panel {
         if (root.view === "run" && root.run) bridge.request("get_run", {run_id: root.run.id})
       }
       else if (op === "get_run") root.run = data.run
+      else if (op === "get_routine") { root.editTarget = data.routine; root.editing = true }
       else if (op === "run_now") { root.nowMs = Date.now(); bridge.request("dashboard", {}) }
       else if (op === "output_settings") {
         root.settings = data
@@ -178,7 +194,7 @@ Panel {
     FocusScope {
       anchors.fill: parent
       Keys.onEscapePressed: {
-        if (root.editing) { root.editing = false; newRoutine.forceActiveFocus() }
+        if (root.editing) root.stopEditing()
         else if (root.view !== "list") root.back()
         else root.dismiss()
       }
@@ -202,6 +218,7 @@ Panel {
               defaults: root.defaults
               client: bridge
               connected: root.connected
+              existing: root.editTarget
               onRevealRequested: function(item) {
                 Qt.callLater(function() {
                   var y = item.mapToItem(column, 0, 0).y
@@ -215,11 +232,11 @@ Panel {
                 if (!root.opened) { root.hostWidget ? root.hostWidget.open() : root.open() }
               })
               onSaved: function(routine) {
-                root.editing = false
+                if (root.routine && routine && routine.id === root.routine.id) root.routine = routine
+                root.stopEditing()
                 root.refresh()
-                newRoutine.forceActiveFocus()
               }
-              onCanceled: { root.editing = false; newRoutine.forceActiveFocus() }
+              onCanceled: root.stopEditing()
             }
             onLoaded: Qt.callLater(function() { editor.item.focusFirst() })
           }
@@ -399,6 +416,15 @@ Panel {
                   bordered: true
                   enabled: !root.samples && root.connected && !bridge.busy
                   onClicked: root.runNow(root.routine)
+                }
+                Button {
+                  objectName: "editRoutine"
+                  text: "Edit"
+                  iconText: "󰏫"
+                  focusable: true
+                  bordered: true
+                  enabled: !root.samples && root.connected && !bridge.busy
+                  onClicked: root.startEdit(root.routine)
                 }
                 Caption {
                   anchors.verticalCenter: parent.verticalCenter

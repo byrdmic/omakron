@@ -313,23 +313,60 @@ def verify_editor_flow(ipc, key, capture, *, out):
     ipc("test", "set", "field_name", "Discard this draft")
     key("Escape")
     assert not state()["editing"] and len(state()["routines"]) == 2
+
+    edited = verify_edit_flow(ipc, key, capture, state, saved)
     (out / "editor-result.json").write_text(
         json.dumps(
             {
                 "check": "routine editor",
                 "result": "passed",
                 "saved": saved,
+                "edited": edited,
                 "checks": [
                     "keyboard create/save/cancel",
                     "five previews",
                     "invalid draft retained",
                     "save paused",
+                    "edit reloads schedule, saves revision 2, Escape discards",
                 ],
             },
             indent=2,
         )
         + "\n"
     )
+
+
+def verify_edit_flow(ipc, key, capture, state, saved):
+    """Open the saved routine, change it through the same form, and discard a second edit."""
+    ipc("test", "openRoutine", "Keyboard schedule")
+    wait_until(lambda: state()["view"] == "routine")
+    ipc("test", "focus", "editRoutine")
+    key("Return")
+    wait_until(lambda: state()["editing"])
+    assert state()["mode"] == "Custom repeat", state()["mode"]
+    capture("editor-edit")
+    ipc("test", "set", "field_name", "Keyboard schedule, edited")
+    ipc("test", "focus", "saveRoutine")
+    key("Return")
+    wait_until(
+        lambda: (
+            not state()["editing"]
+            and any(r["name"] == "Keyboard schedule, edited" for r in state()["routines"])
+        )
+    )
+    edited = [r for r in state()["routines"] if r["name"] == "Keyboard schedule, edited"][0]
+    assert edited["id"] == saved["id"] and edited["revision"] == 2, edited
+    assert edited["cron"] == "0 9 * * 1-5" and not edited["enabled"], edited
+    assert state()["view"] == "routine"
+    capture("editor-edited")
+    ipc("test", "focus", "editRoutine")
+    key("Return")
+    wait_until(lambda: state()["editing"])
+    ipc("test", "set", "field_name", "Discard this edit")
+    key("Escape")
+    assert not state()["editing"] and state()["view"] == "routine"
+    assert all(r["name"] != "Discard this edit" for r in state()["routines"])
+    return edited
 
 
 def main():

@@ -14,6 +14,11 @@ import "ScheduleText.js" as ScheduleText
 // the raw expression stays available under "Custom repeat". The next run
 // times appear on their own as the schedule changes, so there is nothing to
 // press before saving.
+//
+// With `existing` set, the same form edits that routine: the fields start
+// from its saved values, the schedule is decoded back into the pickers when
+// this editor could have written it, and saving sends update_routine with
+// the revision the form was opened on. Saving an edit pauses the routine.
 Column {
   id: root
   objectName: "routineEditor"
@@ -21,6 +26,8 @@ Column {
   property var defaults: ({})
   property var client: null
   property bool connected: true
+  property var existing: null  // the routine being edited, or null for a new one
+  readonly property bool revising: existing !== null && existing !== undefined
   property string error: ""
   property string previewText: ""
   property string previewKey: ""
@@ -87,7 +94,47 @@ Column {
   function save() {
     if (cronExpression() === "no days") { error = "Pick at least one day."; return }
     error = ""
-    client.request("create_routine", draft())
+    if (revising) {
+      var params = draft()
+      params.routine_id = existing.id
+      params.expected_revision = existing.revision
+      client.request("update_routine", params)
+    } else client.request("create_routine", draft())
+  }
+  // Start the form from a saved routine. A sourced routine reads its skill
+  // file again, the same as when it was imported.
+  function load(saved) {
+    fill(name, saved.name || "")
+    fill(prompt, saved.prompt || "")
+    model.text = saved.model || root.defaults.model || "claude-sonnet-5"
+    folder.text = saved.cwd || root.defaults.cwd || ""
+    tools.text = saved.tools === null || saved.tools === undefined ? (root.defaults.tools || "default") : saved.tools
+    timezone.text = saved.timezone || root.defaults.timezone || "UTC"
+    permissionMode = saved.permission_mode || ""
+    applySchedule(saved.schedule_kind, saved.cron)
+    if (saved.source) sourceField.text = saved.source
+    step = "edit"
+  }
+  // Put a saved schedule back into the pickers. Anything the pickers cannot
+  // express is shown as the raw expression under "Custom repeat".
+  function applySchedule(kind, cron) {
+    if (kind === "manual") { mode = "Manual"; return }
+    advanced.text = cron || ""
+    mode = "Custom repeat"
+    var f = (cron || "").trim().split(/\s+/)
+    if (f.length !== 5 || f[2] !== "*" || f[3] !== "*") return
+    if (f[0] === "0" && f[1] === "*" && f[4] === "*") { mode = "Hourly"; return }
+    if (!/^\d+$/.test(f[0]) || !/^\d+$/.test(f[1])) return
+    var m = Number(f[0]), h = Number(f[1])
+    if (h > 23 || [0, 15, 30, 45].indexOf(m) < 0) return
+    var picked = f[4] === "*" ? [] : f[4].split(",")
+    for (var i = 0; i < picked.length; i++) if (!/^[0-6]$/.test(picked[i])) return
+    hour12 = h % 12 === 0 ? 12 : h % 12
+    meridiem = h < 12 ? "AM" : "PM"
+    minute = m < 10 ? "0" + m : String(m)
+    if (picked.length === 0) mode = "Daily"
+    else if (picked.length === 1) { mode = "Weekly"; weekday = picked[0] }
+    else { mode = "Custom time"; days = picked }
   }
   function setSource(path) {
     if (path === root.source) return
@@ -129,7 +176,7 @@ Column {
 
   Timer { id: previewTimer; interval: 400; onTriggered: root.preview() }
   Timer { id: skillTimer; interval: 400; onTriggered: root.readSkill() }
-  Component.onCompleted: scheduleChanged()
+  Component.onCompleted: { if (revising) load(existing); scheduleChanged() }
 
   Connections {
     target: root.client
@@ -146,7 +193,7 @@ Column {
         root.skillNote = ""
         if (name.text === "" || root.nameFromSkill) { root.fill(name, data.name); root.nameFromSkill = true }
         root.fill(prompt, data.prompt)
-      } else if (op === "create_routine") root.saved(data.routine)
+      } else if (op === "create_routine" || op === "update_routine") root.saved(data.routine)
     }
     function onFailure(op, code, message) {
       if (op === "preview_schedule") root.previewText = message
@@ -185,7 +232,10 @@ Column {
     width: parent.width
     spacing: Style.space(2)
     Text {
-      text: "New routine"
+      width: parent.width
+      elide: Text.ElideRight
+      textFormat: Text.PlainText
+      text: root.revising ? "Edit " + (root.existing.name || "routine") : "New routine"
       color: Color.foreground
       font.family: Style.font.family
       font.pixelSize: Style.font.title
@@ -194,7 +244,8 @@ Column {
     Caption {
       text: root.step === "choose" ? "A routine is a prompt Claude Code runs on a schedule."
           : root.step === "pick" ? "Choose the SKILL.md to import the prompt from."
-          : root.sourced ? "Imported from " + root.skillFile : "Write your own."
+          : root.sourced ? "Imported from " + (root.skillFile || root.source)
+          : root.revising ? "Change anything below, then save." : "Write your own."
     }
   }
 
@@ -570,7 +621,11 @@ Column {
 
   PanelSeparator { width: parent.width }
 
-  Caption { visible: root.step === "edit"; text: (root.defaults.policy || "Claude Code runs with its usual tools and no permission prompts.") + " New routines start paused so you can review them first." }
+  Caption {
+    visible: root.step === "edit"
+    text: (root.defaults.policy || "Claude Code runs with its usual tools and no permission prompts.")
+      + (root.revising ? " Saving pauses the routine. A run already started finishes." : " New routines start paused so you can review them first.")
+  }
   Caption { text: root.error; visible: text !== ""; color: Color.urgent }
 
   Row {
@@ -579,7 +634,7 @@ Column {
       id: saveButton
       objectName: "saveRoutine"
       visible: root.step === "edit"
-      text: "Save routine"
+      text: root.revising ? "Save changes" : "Save routine"
       focusable: true
       bordered: true
       enabled: root.connected && !root.client.busy
@@ -595,7 +650,7 @@ Column {
       enabled: root.skillReady
       onClicked: root.useSkill()
     }
-    Button { objectName: "backEditor"; visible: root.step !== "choose"; text: "Back"; focusable: true; onClicked: root.back() }
+    Button { objectName: "backEditor"; visible: root.step !== "choose" && !root.revising; text: "Back"; focusable: true; onClicked: root.back() }
     Button { objectName: "cancelEditor"; text: "Cancel"; focusable: true; onClicked: root.canceled() }
   }
 
