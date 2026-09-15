@@ -89,6 +89,22 @@ PYTHONPATH=src python -m omakron.client create-routine --name "Nightly tidy" \
   --permission-mode bypassPermissions --env GH_TOKEN
 ```
 
+A routine can import its prompt from a skill file instead of carrying its
+own. The file is a `SKILL.md` whose front matter gives a `name` and
+`description` and whose body is the prompt. The routine stores the file's
+location, and the worker reads the file again at every launch, so editing it
+in a shared repository changes the next run on every machine with no
+re-import. Each run records the text it sent and the file's SHA-256. If the
+file is missing or empty at launch, the run fails with that reason. Schedule,
+working folder, and enabled state stay in Omakron, because a file shared
+between machines should not decide where or whether a routine runs. The
+location may also be the folder that holds the file.
+
+```
+PYTHONPATH=src python -m omakron.client create-routine \
+  --source ~/.claude/scheduled-tasks/nightly-tidy/SKILL.md --cwd /path/to/project
+```
+
 
 To repeat the real-CLI smoke test (one bounded model call under the existing
 login, evidence written beneath the supplied scratch folder):
@@ -99,10 +115,10 @@ PYTHONPATH=src python scripts/smoke_vertical_slice.py --out /path/to/scratch
 
 ## Scheduling controls
 
-Saved cron routines start paused. Enable the saved policy from the details
-view to authorize recurring runs. Saving an edit pauses future
-runs. Pause leaves active work alone and removes queued scheduled work.
-Resume schedules the next future occurrence without catch-up.
+Saving a routine with a time turns its schedule on. Saving a new time on a
+routine that was turned off turns it back on; other edits keep it as it was.
+Pause from the routine view leaves active work alone and removes queued
+scheduled work. Resume schedules the next future occurrence without catch-up.
 
 The service skips missed occurrences beyond 60 seconds, prevents same-routine
 overlap, and expires queued work after five minutes. Checkpoints and local-slot

@@ -140,7 +140,56 @@ def test_v2_upgrade_adds_the_execution_columns_and_drops_the_triage_ones(tmp_pat
     assert {"parameter", "input_snapshot", "input_sha256", "report"}.isdisjoint(run_columns)
     assert "result_text" in run_columns
     assert next(tmp_path.glob("*.v2-*.backup")).is_file()
+    assert "source" in columns and routine.source is None
     store.close()
+
+
+def test_v3_upgrade_adds_the_source_column_and_keeps_execution_choices(tmp_path):
+    path = tmp_path / "v3.db"
+    with sqlite3.connect(path) as connection:
+        connection.executescript((Path(__file__).parent / "fixtures/schema-v3.sql").read_text())
+        connection.execute("INSERT INTO schema_meta VALUES('schema_version','3')")
+        connection.execute(
+            "INSERT INTO routines(id,revision,name,prompt,model,cwd,schedule_kind,"
+            "tools,permission_mode,created_at,updated_at)"
+            " VALUES('r',1,'n','p','fake','/','manual','Read,Edit','plan','2026','2026')"
+        )
+    store = Store(path)
+    routine = store.get_routine("r")
+    assert routine.source is None and routine.tools == "Read,Edit"
+    assert routine.permission_mode == "plan" and routine.prompt == "p"
+    assert (
+        store.conn.execute("SELECT value FROM schema_meta WHERE key='schema_version'").fetchone()[0]
+        == "4"
+    )
+    assert next(tmp_path.glob("*.v3-*.backup")).is_file()
+    store.close()
+
+
+def test_source_is_saved_snapshotted_and_the_sent_prompt_is_recorded(store, tmp_path):
+    routine = store.create_routine(
+        name="Triage",
+        prompt="Body as of import.",
+        model="claude-sonnet-5",
+        cwd=str(tmp_path),
+        source=str(tmp_path / "skill"),
+    )
+    assert routine.source == str(tmp_path / "skill")
+    run, _ = store.enqueue_run(routine, trigger="manual", idempotency_key=None, deadline_s=10)
+    assert run.routine_snapshot["source"] == str(tmp_path / "skill")
+    with pytest.raises(StoreError, match="not claimed"):
+        store.set_snapshot_prompt(run.id, "Body at launch.", source_sha256="abc")
+    claimed = store.claim_next("w1")
+    assert claimed is not None and claimed.id == run.id
+    store.set_snapshot_prompt(run.id, "Body at launch.", source_sha256="abc")
+    snapshot = store.get_run(run.id).routine_snapshot
+    assert snapshot["prompt"] == "Body at launch." and snapshot["source_sha256"] == "abc"
+    assert store.get_routine(routine.id).prompt == "Body as of import."
+    changed = store.update_routine(
+        routine.id, routine.revision, dict(routine.to_dict(), source=None)
+    )
+    assert changed.source is None
+    assert store.get_run(run.id).routine_snapshot["source"] == str(tmp_path / "skill")
 
 
 def test_execution_choices_are_saved_and_snapshotted(store, tmp_path):
@@ -161,6 +210,42 @@ def test_execution_choices_are_saved_and_snapshotted(store, tmp_path):
     changed = store.update_routine(routine.id, routine.revision, dict(routine.to_dict(), tools=""))
     assert changed.tools == ""
     assert store.get_run(run.id).routine_snapshot["tools"] == "Bash,Edit,Read"
+
+
+def test_a_new_time_turns_the_schedule_on_and_other_edits_keep_it(store, tmp_path):
+    routine = store.create_routine(
+        name="Report",
+        prompt="Original",
+        model="claude-sonnet-5",
+        cwd=str(tmp_path),
+        schedule_kind="cron",
+        cron="53 16 * * 1-5",
+        timezone="America/New_York",
+        enabled=True,
+    )
+    edited = store.update_routine(
+        routine.id, routine.revision, dict(routine.to_dict(), prompt="Changed")
+    )
+    assert edited.enabled
+    off = store.set_enabled(edited.id, edited.revision, False)
+    renamed = store.update_routine(off.id, off.revision, dict(off.to_dict(), name="Renamed"))
+    assert not renamed.enabled
+    retimed = store.update_routine(
+        renamed.id, renamed.revision, dict(renamed.to_dict(), cron="0 9 * * 1-5")
+    )
+    assert retimed.enabled and retimed.cron == "0 9 * * 1-5"
+    manual = store.update_routine(
+        retimed.id,
+        retimed.revision,
+        dict(retimed.to_dict(), schedule_kind="manual", cron=None, timezone=None),
+    )
+    assert not manual.enabled
+    back = store.update_routine(
+        manual.id,
+        manual.revision,
+        dict(manual.to_dict(), schedule_kind="cron", cron="0 9 * * *", timezone="UTC"),
+    )
+    assert back.enabled
 
 
 def test_result_text_is_kept_and_bounded(store, routine):

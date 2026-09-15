@@ -29,8 +29,9 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from omakron import __version__, history, ipc, manage, routines, seed
+from omakron import __version__, history, ipc, manage, routines, seed, skills
 from omakron.client import socket_path
 from omakron.runner import (
     DEFAULT_MODEL,
@@ -332,10 +333,9 @@ class Service(history.HistoryApi):
             raise ApiError("bad_request", str(exc)) from exc
 
     def op_create_routine(self, params: dict[str, Any]) -> dict[str, Any]:
-        if params.get("enabled", False) is not False:
-            raise ApiError("bad_request", "new routines start paused; review before enabling")
+        """A routine saved with a time starts on; a manual one runs only when asked."""
         draft = self._validated_draft(params)
-        routine = self._store().create_routine(**draft)
+        routine = self._store().create_routine(**draft, enabled=draft["schedule_kind"] == "cron")
         return {"routine": routine.to_dict()}
 
     def op_update_routine(self, params: dict[str, Any]) -> dict[str, Any]:
@@ -367,11 +367,25 @@ class Service(history.HistoryApi):
             ],
         }
 
+    def op_read_skill(self, params: dict[str, Any]) -> dict[str, Any]:
+        """What the editor shows once a skill folder is chosen: name, description, prompt."""
+        try:
+            skill = skills.load(params.get("source"))
+        except skills.SkillError as exc:
+            raise ApiError("bad_request", str(exc)) from exc
+        return {
+            "source": skill.source,
+            "file": skill.file,
+            "name": skill.name,
+            "description": skill.description,
+            "prompt": skill.prompt,
+        }
+
     def op_editor_defaults(self, params: dict[str, Any]) -> dict[str, Any]:
         return {
-            "cwd": str(self.workdir / "routines"),
+            "cwd": str(Path.home()),
             "model": DEFAULT_MODEL,
-            "timezone": "UTC",
+            "timezone": local_timezone(),
             "tools": DEFAULT_TOOLS,
             "permission_mode": DEFAULT_PERMISSION_MODE,
             "permission_modes": list(PERMISSION_MODES),
@@ -466,6 +480,25 @@ class Service(history.HistoryApi):
             raise ApiError("conflict", str(exc)) from exc
         self.wake.set()
         return {"run": run.to_dict()}
+
+
+def local_timezone(env: dict[str, str] | None = None) -> str:
+    """The machine's zone name for new routines: ``TZ`` if set, else ``/etc/localtime``."""
+    src = os.environ if env is None else env
+    candidates = [src.get("TZ", "")]
+    try:
+        target = os.path.realpath("/etc/localtime")
+        candidates.append(target.split("/zoneinfo/", 1)[1] if "/zoneinfo/" in target else "")
+    except OSError:
+        pass
+    for name in candidates:
+        if name and not name.startswith(":"):
+            try:
+                ZoneInfo(name)
+            except ZoneInfoNotFoundError, ValueError:
+                continue
+            return name
+    return "UTC"
 
 
 def _gone_within(pid: int, seconds: float) -> bool:

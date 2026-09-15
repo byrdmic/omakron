@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from omakron import history
+from omakron import history, skills
 from omakron.runner import (
     STOP_CANCEL,
     STOP_SHUTDOWN,
@@ -95,9 +95,23 @@ class Worker:
     def _fail(self, run: Run, problems: list[str], **extra: Any) -> None:
         log.warning("run %s failed: %s", run.id, problems)
         self.store.finish_run(run.id, status=Outcome.FAILED, problems=problems, **extra)
+        if extra.get("output_dir"):
+            self._write_log(run.id, Path(extra["output_dir"]), None, None)
+
+    def _write_log(self, run_id: str, out_dir: Path, stream: Any, stderr_tail: str | None) -> None:
+        """``log.md``: the readable account. Best effort; the status is already durable."""
+        try:
+            final = self.store.get_run(run_id)
+            write_durably(
+                out_dir / "log.md", history.render_log(final, stream, stderr_tail).encode("utf-8")
+            )
+        except Exception:
+            log.exception("run %s: readable log was not written", run_id)
 
     def execute(self, run: Run) -> None:
-        out_dir = self.config.runs_dir / run.id
+        settings = history.output_settings(self.store)
+        base = Path(settings["log_dir"]) if settings.get("log_dir") else self.config.runs_dir
+        out_dir = base / run.id
         try:
             out_dir.mkdir(parents=True, exist_ok=False, mode=0o700)
         except OSError as exc:
@@ -108,6 +122,16 @@ class Worker:
             return
 
         routine = run.routine_snapshot
+        prompt = routine["prompt"]
+        if routine.get("source"):
+            # The skill file is the prompt. Read it now and record what was sent.
+            try:
+                skill = skills.load(routine["source"])
+            except skills.SkillError as exc:
+                self._fail(run, [str(exc)], output_dir=str(out_dir))
+                return
+            prompt = skill.prompt
+            self.store.set_snapshot_prompt(run.id, prompt, source_sha256=skill.sha256)
         try:
             argv = claude_argv(
                 routine["model"],
@@ -123,7 +147,7 @@ class Worker:
             argv=argv,
             cwd=cwd,
             env=child_env(extra=routine.get("env_passthrough") or []),
-            stdin_text=routine["prompt"],  # the prompt is stdin, never argv
+            stdin_text=prompt,  # the prompt is stdin, never argv
             deadline_s=run.deadline_s,
         )
 
@@ -144,7 +168,7 @@ class Worker:
             out_dir=out_dir,
             stop_check=stop_check,
             on_started=on_started,
-            max_output_bytes=history.output_settings(self.store)["max_output_bytes"],
+            max_output_bytes=settings["max_output_bytes"],
         )
         if supervised.launch_error:
             self._fail(run, [supervised.launch_error], output_dir=str(out_dir))
@@ -211,3 +235,4 @@ class Worker:
             stderr_tail=supervised.stderr_tail or None,
         )
         log.info("run %s ended %s", run.id, verdict.outcome)
+        self._write_log(run.id, out_dir, stream, supervised.stderr_tail or None)

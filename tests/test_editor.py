@@ -25,7 +25,7 @@ def test_create_and_reopen_schedule_identically(service):
     routine = service.request("create_routine", expected)["routine"]
     service.restart()
     saved = service.request("get_routine", {"routine_id": routine["id"]})["routine"]
-    assert not saved["enabled"] and saved["revision"] == 1
+    assert saved["enabled"] and saved["revision"] == 1
     assert {key: saved[key] for key in expected} == expected
 
 
@@ -63,8 +63,33 @@ def test_conflicting_edit_preserves_latest_accepted_revision(service):
             dict(original, name="Stale draft", routine_id=saved["id"], expected_revision=1),
         )
     assert error.value.code == "conflict"
-    assert updated["revision"] == 2 and not updated["enabled"]
+    assert updated["revision"] == 2 and updated["enabled"]
     assert service.request("get_routine", {"routine_id": saved["id"]})["routine"] == updated
+
+
+def test_setting_a_new_time_turns_the_schedule_on(service):
+    original = draft(service)
+    saved = service.request("create_routine", original)["routine"]
+    off = service.request(
+        "set_enabled", {"routine_id": saved["id"], "expected_revision": 1, "enabled": False}
+    )["routine"]
+    renamed = service.request(
+        "update_routine",
+        dict(original, name="Renamed", routine_id=saved["id"], expected_revision=off["revision"]),
+    )["routine"]
+    assert not renamed["enabled"]
+    edited = service.request(
+        "update_routine",
+        dict(
+            original,
+            cron="53 16 * * 1-5",
+            routine_id=saved["id"],
+            expected_revision=renamed["revision"],
+        ),
+    )["routine"]
+    assert edited["enabled"] and edited["cron"] == "53 16 * * 1-5"
+    row = next(r for r in service.request("dashboard")["routines"] if r["id"] == saved["id"])
+    assert row["next_run_at"] is not None
 
 
 def test_preview_uses_the_lab_evaluator_for_dst(service):
@@ -107,3 +132,63 @@ def test_raw_client_keeps_prompt_data_out_of_shell(service):
     result = service.client("request", stdin=json.dumps(request))
     assert result.returncode == 0, result.stdout + result.stderr
     assert json.loads(result.stdout)["routine"]["prompt"] == request["params"]["prompt"]
+
+
+SKILL_TEXT = """---
+name: folder-notes
+description: Write a note about the working folder.
+---
+
+Describe the working folder in one paragraph and reply with it.
+"""
+
+
+def skill_folder(tmp_path, text=SKILL_TEXT):
+    folder = tmp_path / "skills" / "folder-notes"
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "SKILL.md").write_text(text, encoding="utf-8")
+    return folder
+
+
+def test_create_from_a_skill_folder_takes_name_and_prompt_from_skill_md(service, tmp_path):
+    folder = skill_folder(tmp_path)
+    params = dict(draft(service), name="", prompt="", source=str(folder))
+    saved = service.request("create_routine", params)["routine"]
+    assert saved["source"] == str(folder)
+    assert saved["name"] == "folder-notes"
+    assert saved["prompt"] == "Describe the working folder in one paragraph and reply with it."
+    named = service.request("create_routine", dict(params, name="My notes", prompt="ignored text"))[
+        "routine"
+    ]
+    assert named["name"] == "My notes" and named["prompt"] == saved["prompt"]
+    service.restart()
+    again = service.request("get_routine", {"routine_id": saved["id"]})["routine"]
+    assert again["source"] == str(folder) and again["prompt"] == saved["prompt"]
+
+
+def test_read_skill_previews_a_folder_and_refuses_a_bad_one(service, tmp_path):
+    folder = skill_folder(tmp_path)
+    shown = service.request("read_skill", {"source": str(folder)})
+    assert shown["name"] == "folder-notes"
+    assert shown["description"] == "Write a note about the working folder."
+    assert shown["prompt"].startswith("Describe the working folder")
+    assert shown["file"] == str(folder / "SKILL.md")
+    with pytest.raises(ServiceError) as error:
+        service.request("read_skill", {"source": str(tmp_path)})
+    assert error.value.code == "bad_request" and "no SKILL.md" in str(error.value)
+    with pytest.raises(ServiceError):
+        service.request("create_routine", dict(draft(service), source=str(tmp_path / "gone")))
+
+
+def test_import_by_file_path_stores_that_path_and_the_default_zone_is_local(service, tmp_path):
+    file = skill_folder(tmp_path) / "SKILL.md"
+    params = dict(draft(service), name="", source=str(file))
+    saved = service.request("create_routine", params)["routine"]
+    assert saved["source"] == str(file) and saved["name"] == "folder-notes"
+    shown = service.request("read_skill", {"source": str(file)})
+    assert shown["file"] == str(file) and shown["source"] == str(file)
+    defaults = service.request("editor_defaults")
+    assert "skill_roots" not in defaults and "skills" not in defaults
+    assert defaults["cwd"] == service.env()["HOME"]  # the editor starts in the home folder
+    assert defaults["timezone"]  # a zone name the evaluator accepts
+    service.request("preview_schedule", {"cron": "0 9 * * *", "timezone": defaults["timezone"]})

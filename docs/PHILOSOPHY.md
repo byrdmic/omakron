@@ -82,6 +82,9 @@ service exists so those guarantees hold.
 - The child environment is the session basics plus whatever keys the routine
   names. Keys from a parent Claude Code session are never inherited.
 - `src/omakron/seed.py` seeds an example routine with tools.
+- `src/omakron/skills.py` lets a routine import its prompt from a skill file.
+  The SKILL.md is read at every launch, so the file in the person's shared
+  repository is the program and the run record keeps the text sent.
 - The model's result is stored as `result.md` in the run folder and shown in
   the run detail. A run is not marked succeeded until that file is written.
 

@@ -400,3 +400,61 @@ def test_status_and_runs_listing(service: ServiceHarness):
     assert detail["result_text"] == run["result_text"]
     waited = json.loads(service.client("wait", run["id"], "--timeout", "5").stdout)["run"]
     assert waited["status"] == "succeeded"
+
+
+@pytest.mark.slow
+def test_a_skill_folder_routine_reads_skill_md_at_every_launch(service: ServiceHarness, tmp_path):
+    folder = tmp_path / "skills" / "notes"
+    folder.mkdir(parents=True)
+    skill = folder / "SKILL.md"
+    skill.write_text("---\nname: notes\n---\nFirst version of the prompt.\n", encoding="utf-8")
+    defaults = service.request("editor_defaults")
+    params = {"source": str(folder), "cwd": defaults["cwd"], "model": defaults["model"]}
+    routine = service.request("create_routine", params)["routine"]
+    assert routine["name"] == "notes" and routine["prompt"] == "First version of the prompt."
+
+    first = service.request("run_now", {"routine_id": routine["id"]})["run"]
+    done = service.wait_run(first["id"])
+    assert done["status"] == "succeeded", done["problems"]
+    assert done["routine_snapshot"]["prompt"] == "First version of the prompt."
+    assert done["routine_snapshot"]["source"] == str(folder)
+
+    # Edit the file in place, as a pull on the shared repository would.
+    skill.write_text("---\nname: notes\n---\nSecond version, longer than before.\n")
+    second = service.request("run_now", {"routine_id": routine["id"]})["run"]
+    done = service.wait_run(second["id"])
+    assert done["status"] == "succeeded", done["problems"]
+    assert done["routine_snapshot"]["prompt"] == "Second version, longer than before."
+    digest = hashlib.sha256(skill.read_bytes()).hexdigest()
+    assert done["routine_snapshot"]["source_sha256"] == digest
+    assert done["routine_revision"] == 1, "reading the file is not a routine edit"
+    launches = service.launches()
+    assert [launch["stdin_bytes"] for launch in launches[-2:]] == [
+        len(b"First version of the prompt."),
+        len(b"Second version, longer than before."),
+    ]
+    # The stored routine still shows the text seen at import; the file is authoritative.
+    saved = service.request("get_routine", {"routine_id": routine["id"]})["routine"]
+    assert saved["prompt"] == "First version of the prompt."
+
+    # A missing file is a failed run with the reason, not a silent fallback.
+    skill.unlink()
+    third = service.request("run_now", {"routine_id": routine["id"]})["run"]
+    done = service.wait_run(third["id"])
+    assert done["status"] == "failed"
+    assert any("no SKILL.md" in problem for problem in done["problems"])
+    assert len(service.launches()) == len(launches), "nothing was launched without a prompt"
+
+
+@pytest.mark.slow
+def test_cli_create_routine_from_a_source_folder(service: ServiceHarness, tmp_path):
+    folder = tmp_path / "skills" / "cli"
+    folder.mkdir(parents=True)
+    (folder / "SKILL.md").write_text("---\nname: from-cli\n---\nBody.\n", encoding="utf-8")
+    cwd = service.request("editor_defaults")["cwd"]
+    result = service.client("create-routine", "--source", str(folder), "--cwd", cwd)
+    assert result.returncode == 0, result.stdout + result.stderr
+    routine = json.loads(result.stdout)["routine"]
+    assert routine["name"] == "from-cli" and routine["source"] == str(folder)
+    missing = service.client("create-routine", "--prompt", "x", "--cwd", cwd)
+    assert missing.returncode != 0 and "--name is required" in missing.stderr

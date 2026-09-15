@@ -101,6 +101,9 @@ def verify(out: Path, live_editor: bool = False, plugin: Path = REPO):  # noqa: 
             wait_until((runtime / "wayland-1").exists)
             env["WAYLAND_DISPLAY"] = "wayland-1"
             env["HYPRLAND_INSTANCE_SIGNATURE"] = next((runtime / "hypr").iterdir()).name
+            # The popup disables "New routine" while the service is unreachable, so
+            # the keyboard checks need a real service. It runs against the fake CLI.
+            start_service(env, scratch=scratch, out=out, processes=processes)
             with (out / "shell.log").open("w") as log:
                 processes.append(
                     subprocess.Popen(
@@ -142,9 +145,10 @@ def verify(out: Path, live_editor: bool = False, plugin: Path = REPO):  # noqa: 
 
             ipc("test", "open")
             wait_until(lambda: json.loads(ipc("test", "inspect"))["omakron"])
+            wait_until(lambda: json.loads(ipc("test", "editorState"))["connected"])
             time.sleep(0.3)
             capture("scale-100")
-            key("Tab")
+            # The panel focuses "New routine" on open, so Return alone starts a draft.
             key("Return")
             assert json.loads(ipc("omakron.routines", "state"))["editing"]
             capture("editor-empty")
@@ -184,9 +188,7 @@ def verify(out: Path, live_editor: bool = False, plugin: Path = REPO):  # noqa: 
                 ipc("test", "open")
                 capture("edge-" + position)
             if live_editor:
-                verify_editor_flow(
-                    ipc, key, capture, env=env, scratch=scratch, out=out, processes=processes
-                )
+                verify_editor_flow(ipc, key, capture, out=out)
             errors = (out / "shell.log").read_text()
             unexpected = [
                 line
@@ -205,7 +207,7 @@ def verify(out: Path, live_editor: bool = False, plugin: Path = REPO):  # noqa: 
                         "omarchy": run(["omarchy", "version"], env).stdout.strip(),
                         "checks": [
                             "native bar anchor",
-                            "keyboard Tab/Enter opens the editor",
+                            "keyboard Enter opens the editor",
                             "Escape closes editor then panel",
                             "launcher retains focus target",
                             "toggle reopens",
@@ -237,8 +239,8 @@ def verify(out: Path, live_editor: bool = False, plugin: Path = REPO):  # noqa: 
                         process.wait(timeout=5)
 
 
-def verify_editor_flow(ipc, key, capture, *, env, scratch, out, processes):
-    """Use the actual editor, socket client, and service in temporary state."""
+def start_service(env, *, scratch, out, processes):
+    """Run the real service in temporary state, pointed at the fake ``claude``."""
     service_env = dict(env, PYTHONPATH=str(REPO / "src"))
     config = scratch / "service-config"
     config.mkdir()
@@ -267,6 +269,26 @@ def verify_editor_flow(ipc, key, capture, *, env, scratch, out, processes):
         )
     processes.append(process)
     wait_until((Path(env["XDG_RUNTIME_DIR"]) / "omakron/service.sock").exists)
+
+
+def verify_minute_field(ipc, key, capture, state):
+    """Type a minute the presets lack, refuse one past 59, then pick a preset by keyboard."""
+    ipc("test", "editor", "Daily")
+    ipc("test", "set", "field_minute", "36")
+    wait_until(lambda: state()["cron"] == "36 9 * * *" and "Next runs" in state()["preview"])
+    capture("editor-minute")
+    ipc("test", "set", "field_minute", "75")
+    ipc("test", "set", "field_minute", "5")
+    wait_until(lambda: state()["cron"] == "5 9 * * *")
+    ipc("test", "focus", "field_minute")
+    key("Down")
+    key("Down")
+    key("Return")
+    wait_until(lambda: state()["cron"] == "15 9 * * *")
+
+
+def verify_editor_flow(ipc, key, capture, *, out):
+    """Use the actual editor and socket client against the service started earlier."""
     ipc("test", "position", "top")
     ipc("test", "state", "")
     ipc("test", "open")
@@ -278,18 +300,22 @@ def verify_editor_flow(ipc, key, capture, *, env, scratch, out, processes):
     ipc("test", "focus", "newRoutine")
     key("Return")
     wait_until(lambda: state()["editing"])
+    ipc("test", "focus", "writeOwn")
+    key("Return")
     ipc("test", "set", "field_name", "Keyboard schedule")
     ipc("test", "set", "field_prompt", "A literal report prompt with $ and quotes.")
-    ipc("test", "editor", "Weekdays")
+    verify_minute_field(ipc, key, capture, state)
+    ipc("test", "editor", "Custom repeat")
+    ipc("test", "set", "field_advanced", "0 9 * * 1-5")
     wait_until(lambda: "Next runs" in state()["preview"])
     capture("editor-preview")
-    ipc("test", "set", "field_time", "25:99")
+    ipc("test", "set", "field_advanced", "0 90 * * *")
     ipc("test", "focus", "saveRoutine")
     key("Return")
     wait_until(lambda: state()["error"] != "")
     assert state()["editing"] and len(state()["routines"]) == 1, state()
     capture("editor-invalid")
-    ipc("test", "set", "field_time", "09:00")
+    ipc("test", "set", "field_advanced", "0 9 * * 1-5")
     ipc("test", "focus", "saveRoutine")
     key("Return")
     wait_until(lambda: not state()["editing"] and len(state()["routines"]) == 2)
@@ -299,26 +325,121 @@ def verify_editor_flow(ipc, key, capture, *, env, scratch, out, processes):
     ipc("test", "focus", "newRoutine")
     key("Return")
     wait_until(lambda: state()["editing"])
+    ipc("test", "focus", "writeOwn")
+    key("Return")
     ipc("test", "set", "field_name", "Discard this draft")
     key("Escape")
     assert not state()["editing"] and len(state()["routines"]) == 2
+
+    edited = verify_edit_flow(ipc, key, capture, state, saved)
+    verify_sourced_edit(ipc, key, capture, state, out / "skill" / "SKILL.md")
     (out / "editor-result.json").write_text(
         json.dumps(
             {
                 "check": "routine editor",
                 "result": "passed",
                 "saved": saved,
+                "edited": edited,
                 "checks": [
                     "keyboard create/save/cancel",
+                    "typed minute 36 previews, 75 is ignored, 5 is accepted, presets pick :15",
                     "five previews",
                     "invalid draft retained",
-                    "save paused",
+                    "save leaves the schedule off",
+                    "edit reloads schedule, saves revision 2, Escape discards",
+                    "schedule on then off from the routine view",
+                    "imported routine edited as soon as it opens saves the typed minute",
                 ],
             },
             indent=2,
         )
         + "\n"
     )
+
+
+def verify_sourced_edit(ipc, key, capture, state, skill):
+    """Import a skill, then edit that routine the moment it opens and save a typed minute.
+
+    Opening a sourced routine reads its skill file and previews its schedule in
+    the same tick; the client must take them one at a time and still accept the save.
+    """
+    skill.parent.mkdir()
+    skill.write_text("---\nname: Imported skill\ndescription: Synthetic.\n---\n\nWrite one line.\n")
+    key("Escape")
+    wait_until(lambda: state()["view"] == "list")
+    ipc("test", "focus", "newRoutine")
+    key("Return")
+    wait_until(lambda: state()["editing"])
+    ipc("test", "focus", "importSkill")
+    key("Return")
+    ipc("test", "set", "field_source", str(skill))
+    wait_until(lambda: state()["skill"] == str(skill))
+    ipc("test", "focus", "useSkill")
+    key("Return")
+    ipc("test", "focus", "saveRoutine")
+    key("Return")
+
+    def imported():
+        return [r for r in state()["routines"] if r["name"] == "Imported skill"]
+
+    wait_until(lambda: not state()["editing"] and imported())
+    ipc("test", "openRoutine", "Imported skill")
+    wait_until(lambda: state()["view"] == "routine")
+    ipc("test", "focus", "editRoutine")
+    key("Return")
+    wait_until(lambda: state()["editing"] and state()["mode"] == "Daily")
+    ipc("test", "set", "field_minute", "36")
+    ipc("test", "focus", "saveRoutine")
+    key("Return")
+    wait_until(lambda: not state()["editing"])
+    assert imported()[0]["cron"] == "36 9 * * *" and imported()[0]["revision"] == 2, imported()
+    assert state()["skill"] == "", state()
+    capture("editor-sourced-edited")
+
+
+def verify_edit_flow(ipc, key, capture, state, saved):
+    """Open the saved routine, change it through the same form, and discard a second edit."""
+    ipc("test", "openRoutine", "Keyboard schedule")
+    wait_until(lambda: state()["view"] == "routine")
+    ipc("test", "focus", "editRoutine")
+    key("Return")
+    wait_until(lambda: state()["editing"])
+    assert state()["mode"] == "Custom repeat", state()["mode"]
+    capture("editor-edit")
+    ipc("test", "set", "field_name", "Keyboard schedule, edited")
+    ipc("test", "focus", "saveRoutine")
+    key("Return")
+    wait_until(
+        lambda: (
+            not state()["editing"]
+            and any(r["name"] == "Keyboard schedule, edited" for r in state()["routines"])
+        )
+    )
+    edited = [r for r in state()["routines"] if r["name"] == "Keyboard schedule, edited"][0]
+    assert edited["id"] == saved["id"] and edited["revision"] == 2, edited
+    assert edited["cron"] == "0 9 * * 1-5" and not edited["enabled"], edited
+    assert state()["view"] == "routine"
+    capture("editor-edited")
+    ipc("test", "focus", "editRoutine")
+    key("Return")
+    wait_until(lambda: state()["editing"])
+    ipc("test", "set", "field_name", "Discard this edit")
+    key("Escape")
+    assert not state()["editing"] and state()["view"] == "routine"
+    assert all(r["name"] != "Discard this edit" for r in state()["routines"])
+
+    # Turn the schedule on from the routine view, then off again.
+    def enabled():
+        return [r["enabled"] for r in state()["routines"] if r["id"] == saved["id"]][0]
+
+    ipc("test", "focus", "toggleEnabled")
+    key("Return")
+    wait_until(enabled)
+    capture("schedule-on")
+    ipc("test", "focus", "toggleEnabled")
+    key("Return")
+    wait_until(lambda: not enabled())
+    return edited
 
 
 def main():
