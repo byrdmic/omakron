@@ -394,8 +394,14 @@ def test_status_and_runs_listing(service: ServiceHarness):
     assert status["routines"] == 1 and status["active_run"] is None
     assert status["service"]["claude_executable"].endswith("/bin/claude")
     run = service.wait_run(service.run_now()["run"]["id"])
-    listed = json.loads(service.client("runs", "--limit", "5").stdout)["runs"]
+    page = json.loads(service.client("runs", "--limit", "5").stdout)
+    listed = page["runs"]
     assert [r["id"] for r in listed] == [run["id"]]
+    assert page["total"] == 1 and page["offset"] == 0
+    older = json.loads(service.client("runs", "--limit", "5", "--offset", "1").stdout)
+    assert older["runs"] == [] and older["total"] == 1 and older["offset"] == 1
+    with pytest.raises(ServiceError, match="offset"):
+        service.request("list_runs", {"offset": -1})
     assert "result_text" not in listed[0], "listings stay small; the detail carries the result"
     detail = json.loads(service.client("run", run["id"]).stdout)["run"]
     assert detail["result_text"] == run["result_text"]

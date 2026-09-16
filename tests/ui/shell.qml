@@ -59,7 +59,8 @@ ShellRoot {
       var e = findItem(p, "routineEditor")
       return JSON.stringify({editing: p.editing, connected: p.connected, routines: p.routines, view: p.view,
         error: e ? e.error : p.error, preview: e ? e.previewText : "", mode: e ? e.mode : "",
-        cron: e ? e.cronExpression() : "", skill: e ? e.skillFile : ""})
+        cron: e ? e.cronExpression() : "", skill: e ? e.skillFile : "",
+        runPage: p.runPage, runTotal: p.runTotal, runsShown: p.runs.length})
     }
     function inspect(): string {
       var widget = bar.findPanelWidget("omakron.routines")

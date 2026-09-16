@@ -28,7 +28,11 @@ Panel {
   property var editTarget: null  // the routine the editor is changing, or null when creating
   property string view: "list"  // list, routine, run, settings
   property var routine: null  // the routine open in the routine view
-  property var runs: []
+  property var runs: []  // the page of runs shown in the routine view
+  property int runPage: 0  // zero-based; page 0 is the newest runs
+  property int runTotal: 0  // how many runs the routine has in all
+  readonly property int runPageSize: 5
+  readonly property int runPages: Math.max(1, Math.ceil(runTotal / runPageSize))
   property var run: null  // the run open in the run view; a summary until the detail arrives
   property string error: ""
   property string settingsNote: ""
@@ -122,8 +126,20 @@ Panel {
     routine = target
     runs = []
     confirmingDelete = false
+    runPage = 0
+    runTotal = 0
     view = "routine"
-    if (!samples) bridge.request("list_runs", {routine_id: target.id, limit: 30})
+    loadRuns()
+  }
+  function loadRuns() {
+    if (!samples && routine) bridge.request("list_runs", {routine_id: routine.id, limit: runPageSize, offset: runPage * runPageSize})
+  }
+  // Move one page through the run history. Negative is toward newer runs.
+  function turnRuns(delta) {
+    var target = runPage + delta
+    if (view !== "routine" || target < 0 || target >= runPages || bridge.busy) return
+    runPage = target
+    loadRuns()
   }
   function openRun(summary) {
     run = summary
@@ -189,11 +205,14 @@ Panel {
         root.error = ""
         if (root.view === "routine" && root.routine) {
           for (var i = 0; i < data.routines.length; i++) if (data.routines[i].id === root.routine.id) root.routine = data.routines[i]
-          bridge.request("list_runs", {routine_id: root.routine.id, limit: 30})
+          root.loadRuns()
         } else if (root.view === "run" && root.run) bridge.request("get_run", {run_id: root.run.id})
       }
       else if (op === "list_runs") {
-        root.runs = data.runs
+        root.runTotal = data.total
+        // Runs were deleted under this page, or a stale reply arrived after paging. Step back to the last page that has runs.
+        if (data.runs.length === 0 && data.offset > 0 && data.total > 0) { root.runPage = Math.floor((data.total - 1) / root.runPageSize); root.loadRuns() }
+        else if (data.offset === root.runPage * root.runPageSize) root.runs = data.runs
         if (root.view === "run" && root.run) bridge.request("get_run", {run_id: root.run.id})
       }
       else if (op === "get_run") root.run = data.run
@@ -252,6 +271,8 @@ Panel {
         else if (root.view !== "list") root.back()
         else root.dismiss()
       }
+      Keys.onLeftPressed: function(event) { if (root.view === "routine" && !root.editing) { root.turnRuns(-1); event.accepted = true } else event.accepted = false }
+      Keys.onRightPressed: function(event) { if (root.view === "routine" && !root.editing) { root.turnRuns(1); event.accepted = true } else event.accepted = false }
       Controls.ScrollView {
         id: scroll
         anchors.fill: parent
@@ -565,9 +586,9 @@ Panel {
                 visible: root.routine && root.routine.source ? true : false
                 text: root.routine && root.routine.source ? "Prompt read from " + root.routine.source : ""
               }
-              Caption { text: "Runs, newest first. Click one for its result and log."; visible: root.runs.length > 0 }
+              Caption { text: "Runs, newest first. Click one for its result and log."; visible: root.runTotal > 0 }
               Body {
-                visible: root.runs.length === 0
+                visible: root.runTotal === 0 && root.runs.length === 0
                 text: "No runs yet."
                 color: root.dim
                 topPadding: Style.space(12)
@@ -617,6 +638,42 @@ Panel {
                         }
                       }
                     }
+                  }
+                }
+              }
+              // Page through older runs. Left and Right do the same from the keyboard.
+              Item {
+                objectName: "runPager"
+                width: parent.width
+                height: pagerRow.implicitHeight
+                visible: root.runTotal > root.runPageSize
+                Row {
+                  id: pagerRow
+                  anchors.horizontalCenter: parent.horizontalCenter
+                  spacing: Style.space(8)
+                  Button {
+                    objectName: "newerRuns"
+                    iconText: "󰅁"
+                    tooltipText: "Newer runs (Left)"
+                    focusable: true
+                    bordered: true
+                    enabled: root.runPage > 0 && !bridge.busy
+                    onClicked: root.turnRuns(-1)
+                  }
+                  Caption {
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: (root.runPage * root.runPageSize + 1) + "–"
+                      + Math.min(root.runTotal, (root.runPage + 1) * root.runPageSize)
+                      + " of " + root.runTotal
+                  }
+                  Button {
+                    objectName: "olderRuns"
+                    iconText: "󰅂"
+                    tooltipText: "Older runs (Right)"
+                    focusable: true
+                    bordered: true
+                    enabled: root.runPage + 1 < root.runPages && !bridge.busy
+                    onClicked: root.turnRuns(1)
                   }
                 }
               }

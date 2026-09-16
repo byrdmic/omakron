@@ -57,6 +57,20 @@ def test_enqueue_is_idempotent_per_key(store, routine):
     assert len(store.list_runs()) == 1
 
 
+def test_list_runs_pages_newest_first_and_counts(store, routine):
+    ids = [
+        store.enqueue_run(routine, trigger="manual", idempotency_key=f"k{i}", deadline_s=10)[0].id
+        for i in range(7)
+    ]
+    newest_first = list(reversed(ids))
+    assert [r.id for r in store.list_runs(limit=5)] == newest_first[:5]
+    assert [r.id for r in store.list_runs(limit=5, offset=5)] == newest_first[5:]
+    assert store.list_runs(limit=5, offset=7) == []
+    assert store.count_runs() == 7
+    assert store.count_runs(routine_id=routine.id) == 7
+    assert store.count_runs(routine_id="missing") == 0
+
+
 def test_claim_is_exclusive_and_global_concurrency_is_one(store, routine):
     a, _ = store.enqueue_run(routine, trigger="manual", idempotency_key="a", deadline_s=10)
     b, _ = store.enqueue_run(routine, trigger="manual", idempotency_key="b", deadline_s=10)
