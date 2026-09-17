@@ -77,7 +77,9 @@ and paused. It asks the model to describe its working folder and write
 `SUMMARY.md` there. Runs belong to the service: the client may exit at once,
 and the result is read back later with `run` or `runs`.
 
-Each routine chooses how Claude Code runs. `tools` is the CLI's `--tools`
+Each routine chooses how Claude Code runs. `model` is the CLI's `--model`
+value, a model id or alias such as `claude-opus-5` or `opus`; new routines
+start on `claude-fable-5-1`. `tools` is the CLI's `--tools`
 value (`default`, `""`, or a comma-separated list), `permission_mode` is one
 of the CLI's modes (`bypassPermissions` by default, since nobody answers
 prompts during a scheduled run), `mcp_config` is an optional path to an MCP

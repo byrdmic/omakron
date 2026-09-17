@@ -101,7 +101,9 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="FOLDER",
         help="a skill folder; its SKILL.md is the prompt, read again at every run",
     )
-    create.add_argument("--model", default="claude-sonnet-5")
+    create.add_argument(
+        "--model", help="a model id or alias, such as claude-opus-5 or opus; default: the service's"
+    )
     create.add_argument("--cwd", required=True)
     create.add_argument("--enabled", action="store_true")
     create.add_argument(
@@ -133,6 +135,7 @@ def build_parser() -> argparse.ArgumentParser:
     runs = sub.add_parser("runs", help="recent runs, newest first")
     runs.add_argument("--routine")
     runs.add_argument("--limit", type=int, default=30)
+    runs.add_argument("--offset", type=int, default=0, help="skip this many newer runs")
 
     run = sub.add_parser("run", help="one run with its result and diagnostics")
     run.add_argument("run_id")
@@ -206,7 +209,11 @@ def _dispatch(args: argparse.Namespace) -> Any:
             result["run"] = wait_for_run(result["run"]["id"], timeout_s=args.wait, sock=sock)
         return result
     if args.command == "runs":
-        return request("list_runs", {"routine_id": args.routine, "limit": args.limit}, sock=sock)
+        return request(
+            "list_runs",
+            {"routine_id": args.routine, "limit": args.limit, "offset": args.offset},
+            sock=sock,
+        )
     if args.command == "run":
         return request("get_run", {"run_id": args.run_id}, sock=sock)
     if args.command == "cancel":

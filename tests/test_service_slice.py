@@ -19,7 +19,7 @@ import pytest
 
 from omakron import seed
 from omakron.client import ServiceError
-from omakron.runner import BASE_FLAGS, ENV_PASSTHROUGH
+from omakron.runner import BASE_FLAGS, DEFAULT_MODEL, ENV_PASSTHROUGH
 
 from .service_harness import ServiceHarness, process_alive, tree_digest, wait_until
 
@@ -33,7 +33,7 @@ def test_seeded_routine_has_tools_and_runs_when_asked(service: ServiceHarness):
     routine = service.seed_routine()
     assert routine["name"] == seed.ROUTINE_NAME
     assert routine["prompt"] == seed.PROMPT
-    assert routine["model"] == "claude-sonnet-5"
+    assert routine["model"] == DEFAULT_MODEL
     assert routine["schedule_kind"] == "manual" and routine["cron"] is None
     assert routine["enabled"] is False
     assert routine["tools"] == "default"
@@ -114,11 +114,11 @@ def test_u05_run_now_yields_one_saved_result_outliving_the_client_and_a_restart(
     assert done["status"] == "succeeded", done["problems"]
     assert done["routine_revision"] == routine["revision"] == 1
     assert done["routine_snapshot"]["prompt"] == seed.PROMPT
-    assert done["routine_snapshot"]["model"] == "claude-sonnet-5"
+    assert done["routine_snapshot"]["model"] == DEFAULT_MODEL
     assert done["routine_snapshot"]["tools"] == "default"
     assert done["result_text"].startswith("The working folder is empty"), "kept as the model said"
-    assert done["resolved_model"] == "claude-sonnet-5"
-    assert done["models_used"] == ["claude-sonnet-5"]
+    assert done["resolved_model"] == DEFAULT_MODEL
+    assert done["models_used"] == [DEFAULT_MODEL]
     assert done["exit_code"] == 0
     assert done["started_at"] and done["ended_at"] and done["claimed_at"]
 
@@ -135,7 +135,7 @@ def test_u05_run_now_yields_one_saved_result_outliving_the_client_and_a_restart(
     assert argv[argv.index("--tools") + 1] == "default"
     assert argv[argv.index("--permission-mode") + 1] == "bypassPermissions"
     assert "--dangerously-skip-permissions" in argv
-    assert argv[argv.index("--model") + 1] == "claude-sonnet-5"
+    assert argv[argv.index("--model") + 1] == DEFAULT_MODEL
     assert "--system-prompt" not in argv and "--safe-mode" not in argv
     assert seed.PROMPT not in " ".join(argv)
     launches = service.launches()
@@ -192,7 +192,7 @@ def test_u08_unknown_model_fails_with_the_cli_message(service: ServiceHarness):
     run = service.wait_run(service.run_now()["run"]["id"])
     assert run["status"] == "failed"
     assert any("issue with the selected model" in p for p in run["problems"])
-    assert run["requested_model"] == "claude-sonnet-5"
+    assert run["requested_model"] == DEFAULT_MODEL
     assert len(service.launches()) == 1
 
 
@@ -394,8 +394,14 @@ def test_status_and_runs_listing(service: ServiceHarness):
     assert status["routines"] == 1 and status["active_run"] is None
     assert status["service"]["claude_executable"].endswith("/bin/claude")
     run = service.wait_run(service.run_now()["run"]["id"])
-    listed = json.loads(service.client("runs", "--limit", "5").stdout)["runs"]
+    page = json.loads(service.client("runs", "--limit", "5").stdout)
+    listed = page["runs"]
     assert [r["id"] for r in listed] == [run["id"]]
+    assert page["total"] == 1 and page["offset"] == 0
+    older = json.loads(service.client("runs", "--limit", "5", "--offset", "1").stdout)
+    assert older["runs"] == [] and older["total"] == 1 and older["offset"] == 1
+    with pytest.raises(ServiceError, match="offset"):
+        service.request("list_runs", {"offset": -1})
     assert "result_text" not in listed[0], "listings stay small; the detail carries the result"
     detail = json.loads(service.client("run", run["id"]).stdout)["run"]
     assert detail["result_text"] == run["result_text"]

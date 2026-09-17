@@ -71,7 +71,7 @@ Column {
     return advanced.text
   }
   function draft() {
-    return {name: name.text, prompt: prompt.text, source: root.source || null, model: model.text, cwd: folder.text,
+    return {name: name.text, prompt: prompt.text, source: root.source || null, model: modelField.text, cwd: folder.text,
       schedule_kind: manual ? "manual" : "cron", cron: cronExpression(), timezone: manual ? null : timezone.text,
       tools: tools.text, permission_mode: permissionMode || root.defaults.permission_mode || "bypassPermissions",
       mcp_config: null, env_passthrough: []}
@@ -109,7 +109,7 @@ Column {
   function load(saved) {
     fill(name, saved.name || "")
     fill(prompt, saved.prompt || "")
-    model.text = saved.model || root.defaults.model || "claude-sonnet-5"
+    modelField.text = saved.model || root.defaults.model || "claude-fable-5-1"
     folder.text = saved.cwd || root.defaults.cwd || ""
     tools.text = saved.tools === null || saved.tools === undefined ? (root.defaults.tools || "default") : saved.tools
     timezone.text = saved.timezone || root.defaults.timezone || "UTC"
@@ -647,8 +647,42 @@ Column {
 
     Caption { id: previewLabel; text: root.previewText; visible: text !== "" }
 
+    // The model: one of the names the service offers, or any id or alias
+    // Claude Code accepts, typed. The run uses exactly what is saved here.
+    Column {
+      width: parent.width
+      spacing: Style.spacing.labelGap
+      FieldLabel { text: "Model" }
+      Row {
+        spacing: Style.space(4)
+        Repeater {
+          model: root.defaults.models || [{value:"claude-fable-5-1",label:"Fable 5.1"},{value:"claude-opus-5",label:"Opus 5"},{value:"claude-sonnet-5",label:"Sonnet 5"},{value:"claude-haiku-4-5",label:"Haiku 4.5"}]
+          Button {
+            required property var modelData
+            objectName: "pickModel_" + modelData.value
+            text: modelData.label
+            fontSize: Style.font.bodySmall
+            focusable: true
+            bordered: true
+            selected: modelField.text === modelData.value
+            onClicked: modelField.text = modelData.value
+          }
+        }
+      }
+      TextField {
+        id: modelField
+        objectName: "field_model"
+        width: parent.width
+        text: root.defaults.model || "claude-fable-5-1"
+        placeholderText: "claude-fable-5-1"
+        Accessible.name: "Claude model"
+        onActiveFocusChanged: if (activeFocus) root.revealRequested(modelField)
+      }
+      Caption { text: "Pick one above or type a model id or Claude Code alias, such as opus. A run uses this model and never falls back to another." }
+    }
+
     Button {
-      text: root.showMore ? "Hide time zone, folder, model, and tools" : "Time zone, folder, model, and tools"
+      text: root.showMore ? "Hide time zone, folder, and tools" : "Time zone, folder, and tools"
       iconText: root.showMore ? "󰅃" : "󰅀"
       fontSize: Style.font.bodySmall
       focusable: true
@@ -702,20 +736,6 @@ Column {
           }
         }
         Caption { text: "Claude Code starts in this folder and can change what is in it." }
-      }
-      Column {
-        width: parent.width
-        spacing: Style.spacing.labelGap
-        FieldLabel { text: "Model" }
-        TextField {
-          id: model
-          objectName: "field_model"
-          width: parent.width
-          text: root.defaults.model || "claude-sonnet-5"
-          Accessible.name: "Claude model"
-          onActiveFocusChanged: if (activeFocus) root.revealRequested(model)
-        }
-        Caption { text: (root.defaults.verified_models || []).indexOf(model.text) >= 0 ? "This model has been verified with Omakron." : "This model is unverified. Runs will not fall back to another model." }
       }
       Column {
         width: parent.width
