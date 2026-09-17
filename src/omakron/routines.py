@@ -14,6 +14,7 @@ from omakron.runner import (
     DEFAULT_TOOLS,
     ENV_KEY_PATTERN,
     MAX_ENV_KEYS,
+    MODEL_PATTERN,
     PERMISSION_MODES,
 )
 from omakron.schedule import Schedule, ScheduleError
@@ -51,9 +52,11 @@ def validate(draft: dict[str, Any], managed_workdir: Path) -> dict[str, Any]:
         raise ValueError("name must be 1-120 characters")
     if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 20_000:
         raise ValueError("prompt must be 1-20000 characters")
-    model = draft.get("model", DEFAULT_MODEL)
-    if not isinstance(model, str) or not re.fullmatch(r"claude-[a-z0-9][a-z0-9.-]{0,100}", model):
-        raise ValueError("model must be a Claude model selector, such as claude-sonnet-5")
+    model = draft.get("model")
+    if model is None or model == "":
+        model = DEFAULT_MODEL
+    if not isinstance(model, str) or not re.fullmatch(MODEL_PATTERN, model):
+        raise ValueError("model must be a model id or alias, such as claude-fable-5-1 or opus")
     cwd = draft.get("cwd")
     if not isinstance(cwd, str) or not cwd or any(c in cwd for c in ("\n", "\r", "\0")):
         raise ValueError("working folder must be an absolute path")

@@ -583,6 +583,10 @@ Panel {
                 text: root.dispatchEnabled ? ScheduleText.nextRun(root.routine, root.nowMs) : ""
               }
               Caption {
+                visible: root.routine && root.routine.model ? true : false
+                text: root.routine && root.routine.model ? "Model " + root.routine.model : ""
+              }
+              Caption {
                 visible: root.routine && root.routine.source ? true : false
                 text: root.routine && root.routine.source ? "Prompt read from " + root.routine.source : ""
               }

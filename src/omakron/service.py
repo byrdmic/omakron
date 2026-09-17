@@ -37,6 +37,7 @@ from omakron.runner import (
     DEFAULT_MODEL,
     DEFAULT_PERMISSION_MODE,
     DEFAULT_TOOLS,
+    MODEL_CHOICES,
     PERMISSION_MODES,
     proc_start_ticks,
     stop_process_group,
@@ -398,6 +399,7 @@ class Service(history.HistoryApi):
         return {
             "cwd": str(Path.home()),
             "model": DEFAULT_MODEL,
+            "models": [dict(choice) for choice in MODEL_CHOICES],
             "timezone": local_timezone(),
             "tools": DEFAULT_TOOLS,
             "permission_mode": DEFAULT_PERMISSION_MODE,
@@ -406,7 +408,6 @@ class Service(history.HistoryApi):
                 "Claude Code runs with its usual tools and no permission prompts. "
                 f"{self.settings.deadline_s:g} second deadline."
             ),
-            "verified_models": [DEFAULT_MODEL],
         }
 
     def op_set_enabled(self, params: dict[str, Any]) -> dict[str, Any]:
