@@ -302,6 +302,20 @@ def test_cancel_queued_run_ends_it_before_start(service: ServiceHarness):
     assert len(service.launches()) == 1
 
 
+def test_queued_run_past_the_configured_wait_limit_is_skipped(service_factory):
+    svc = service_factory("wait", queue_max_wait_s=1.0)
+    assert svc.request("status")["service"]["queue_max_wait_s"] == 1.0
+    svc.set_mode("hang")
+    first = svc.run_now(key="first")["run"]
+    svc.wait_status(first["id"], "running")
+    second = svc.wait_run(svc.run_now(key="second")["run"]["id"])
+    assert second["status"] == "skipped"
+    assert second["problems"] == ["waited longer than the 1 s limit (queue_max_wait_s)"]
+    svc.request("cancel_run", {"run_id": first["id"]})
+    svc.wait_run(first["id"])
+    assert len(svc.launches()) == 1
+
+
 def test_deadline_turns_a_hang_into_timed_out(service_factory):
     svc = service_factory("deadline", deadline_s=1.0)
     svc.set_mode("hang")

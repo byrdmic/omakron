@@ -43,7 +43,16 @@ from omakron.runner import (
 )
 from omakron.schedule import CONVENTION, Schedule
 from omakron.scheduler import Scheduler
-from omakron.store import Routine, Store, StoreError, config_dir, parse_utc, state_dir, utc_now
+from omakron.store import (
+    DEFAULT_QUEUE_MAX_WAIT_S,
+    Routine,
+    Store,
+    StoreError,
+    config_dir,
+    parse_utc,
+    state_dir,
+    utc_now,
+)
 from omakron.worker import Worker, WorkerConfig
 
 log = logging.getLogger("omakron.service")
@@ -58,6 +67,7 @@ MAX_NAME_CHARS = 120
 class Settings:
     claude_executable: str = "claude"
     deadline_s: float = DEFAULT_DEADLINE_S
+    queue_max_wait_s: float = DEFAULT_QUEUE_MAX_WAIT_S
     enforce_compatibility: bool = False
 
     @classmethod
@@ -74,9 +84,13 @@ class Settings:
             raise ValueError("claude_executable must be a non-empty string")
         if isinstance(deadline, bool) or not isinstance(deadline, int | float) or deadline <= 0:
             raise ValueError("deadline_s must be a positive number")
+        max_wait = obj.get("queue_max_wait_s", DEFAULT_QUEUE_MAX_WAIT_S)
+        if isinstance(max_wait, bool) or not isinstance(max_wait, int | float) or max_wait <= 0:
+            raise ValueError("queue_max_wait_s must be a positive number")
         return cls(
             claude_executable=executable,
             deadline_s=float(deadline),
+            queue_max_wait_s=float(max_wait),
             enforce_compatibility=obj.get("enforce_compatibility", False) is True,
         )
 
@@ -127,14 +141,15 @@ class Service(history.HistoryApi):
             self.lock_file = None
             raise RuntimeError("another Omakron service owns this state directory") from exc
         self.runs_dir.mkdir(parents=True, exist_ok=True)
-        self.api_store = Store(self.state_dir / "omakron.db")
+        max_wait = self.settings.queue_max_wait_s
+        self.api_store = Store(self.state_dir / "omakron.db", max_wait)
         self._bind()
         self._seed()
         self._reconcile()
         self.scheduler = Scheduler(self.api_store, self.settings.deadline_s)
         db_path = self.state_dir / "omakron.db"
         worker = Worker(
-            store_factory=lambda: Store(db_path),
+            store_factory=lambda: Store(db_path, max_wait),
             config=WorkerConfig(
                 claude_executable=self.settings.claude_executable,
                 runs_dir=self.runs_dir,
@@ -308,6 +323,7 @@ class Service(history.HistoryApi):
                 "socket": str(self.socket_path),
                 "claude_executable": self.settings.claude_executable,
                 "deadline_s": self.settings.deadline_s,
+                "queue_max_wait_s": self.settings.queue_max_wait_s,
                 "dispatch_enabled": self.scheduler.enabled if self.scheduler else False,
                 "interrupted_on_start": self.interrupted_on_start,
             },

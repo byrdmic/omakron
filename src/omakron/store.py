@@ -33,7 +33,7 @@ RUNNING = "running"
 ACTIVE_STATUSES = (CLAIMED, RUNNING)
 OPEN_STATUSES = (QUEUED, CLAIMED, RUNNING)
 
-QUEUE_EXPIRY_S = 300.0  # a queued run not started within five minutes is skipped
+DEFAULT_QUEUE_MAX_WAIT_S = 14400.0  # a queued run that has waited over four hours is skipped
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_meta (
@@ -341,8 +341,9 @@ def _run(row: sqlite3.Row) -> Run:
 class Store:
     """One SQLite connection. Open one per thread; SQLite serializes writers."""
 
-    def __init__(self, path: Path | str):
+    def __init__(self, path: Path | str, queue_max_wait_s: float = DEFAULT_QUEUE_MAX_WAIT_S):
         self.path = Path(path)
+        self.queue_max_wait_s = queue_max_wait_s
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(str(self.path), timeout=10, isolation_level=None)
         self.conn.row_factory = sqlite3.Row
@@ -684,28 +685,26 @@ class Store:
         return self.get_run(run_id), True
 
     def expire_queue(self, now: str) -> None:
+        """Skip queued runs that have waited longer than ``queue_max_wait_s``."""
+        reason = f"waited longer than the {self.queue_max_wait_s:g} s limit (queue_max_wait_s)"
         with self._tx():
             for row in self.conn.execute(
                 "SELECT id,enqueued_at FROM runs WHERE status='queued'"
             ).fetchall():
-                if (
-                    parse_utc(now) - parse_utc(row["enqueued_at"])
-                ).total_seconds() > QUEUE_EXPIRY_S:
+                waited = (parse_utc(now) - parse_utc(row["enqueued_at"])).total_seconds()
+                if waited > self.queue_max_wait_s:
                     self.conn.execute(
                         "UPDATE runs SET status='skipped', ended_at=?, problems=? WHERE id=?",
-                        (
-                            now,
-                            json.dumps([f"not started within {int(QUEUE_EXPIRY_S)} s of queueing"]),
-                            row["id"],
-                        ),
+                        (now, json.dumps([reason]), row["id"]),
                     )
 
     def claim_next(self, worker: str) -> Run | None:
         """Claim the oldest queued run for ``worker`` in one transaction.
 
         Global concurrency is one: nothing is claimed while another run is
-        claimed or running. Queued runs older than :data:`QUEUE_EXPIRY_S` are
-        marked skipped instead of started late.
+        claimed or running, and a queued run waits for it. A run that has
+        waited longer than ``queue_max_wait_s`` is marked skipped instead of
+        started late.
         """
         now = utc_now()
         with self._tx():
