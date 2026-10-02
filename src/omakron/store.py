@@ -845,17 +845,31 @@ class Store:
             raise StoreError(f"unknown run {run_id}")
         return _run(row)
 
-    def list_runs(self, *, routine_id: str | None = None, limit: int = 30) -> list[Run]:
-        """Newest first."""
+    def list_runs(
+        self, *, routine_id: str | None = None, limit: int = 30, offset: int = 0
+    ) -> list[Run]:
+        """Newest first. ``offset`` skips that many newer runs, for paging."""
         limit = max(1, min(int(limit), 500))
+        offset = max(0, int(offset))
         if routine_id is None:
-            rows = self.conn.execute("SELECT * FROM runs ORDER BY rowid DESC LIMIT ?", (limit,))
+            rows = self.conn.execute(
+                "SELECT * FROM runs ORDER BY rowid DESC LIMIT ? OFFSET ?", (limit, offset)
+            )
         else:
             rows = self.conn.execute(
-                "SELECT * FROM runs WHERE routine_id = ? ORDER BY rowid DESC LIMIT ?",
-                (routine_id, limit),
+                "SELECT * FROM runs WHERE routine_id = ? ORDER BY rowid DESC LIMIT ? OFFSET ?",
+                (routine_id, limit, offset),
             )
         return [_run(r) for r in rows]
+
+    def count_runs(self, *, routine_id: str | None = None) -> int:
+        if routine_id is None:
+            row = self.conn.execute("SELECT COUNT(*) FROM runs").fetchone()
+        else:
+            row = self.conn.execute(
+                "SELECT COUNT(*) FROM runs WHERE routine_id = ?", (routine_id,)
+            ).fetchone()
+        return int(row[0])
 
     def active_run(self) -> Run | None:
         row = self.conn.execute(

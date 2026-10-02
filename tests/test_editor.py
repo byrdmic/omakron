@@ -166,6 +166,38 @@ def test_create_from_a_skill_folder_takes_name_and_prompt_from_skill_md(service,
     assert again["source"] == str(folder) and again["prompt"] == saved["prompt"]
 
 
+def test_model_is_a_choice_on_its_own_and_accepts_the_cli_aliases(service):
+    defaults = service.request("editor_defaults")
+    assert defaults["model"] == "claude-fable-5-1"
+    assert defaults["models"][0] == {"value": "claude-fable-5-1", "label": "Fable 5.1"}
+    offered = {choice["value"] for choice in defaults["models"]}
+    assert offered >= {"claude-opus-5", "claude-sonnet-5"}
+    for chosen in ("opus", "sonnet[1m]", "claude-opus-5", "", None):
+        saved = service.request("create_routine", dict(draft(service), model=chosen))["routine"]
+        assert saved["model"] == (chosen or "claude-fable-5-1"), chosen
+    with pytest.raises(ServiceError):
+        service.request("create_routine", dict(draft(service), model="opus 5"))
+
+
+def test_a_sourced_routine_changes_its_model_and_keeps_the_skill_prompt(service, tmp_path):
+    folder = skill_folder(tmp_path)
+    params = dict(draft(service), name="", prompt="", source=str(folder))
+    saved = service.request("create_routine", params)["routine"]
+    assert saved["model"] == "claude-fable-5-1"
+    edited = service.request(
+        "update_routine",
+        dict(
+            saved,
+            model="claude-opus-5",
+            routine_id=saved["id"],
+            expected_revision=saved["revision"],
+        ),
+    )["routine"]
+    assert edited["model"] == "claude-opus-5" and edited["revision"] == 2
+    assert edited["source"] == str(folder) and edited["prompt"] == saved["prompt"]
+    assert edited["name"] == "folder-notes"
+
+
 def test_read_skill_previews_a_folder_and_refuses_a_bad_one(service, tmp_path):
     folder = skill_folder(tmp_path)
     shown = service.request("read_skill", {"source": str(folder)})

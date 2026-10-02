@@ -320,7 +320,7 @@ def verify_editor_flow(ipc, key, capture, *, out):
     key("Return")
     wait_until(lambda: not state()["editing"] and len(state()["routines"]) == 2)
     saved = [r for r in state()["routines"] if r["name"] == "Keyboard schedule"][0]
-    assert saved["cron"] == "0 9 * * 1-5" and not saved["enabled"]
+    assert saved["cron"] == "0 9 * * 1-5" and saved["enabled"], saved
     capture("editor-saved")
     ipc("test", "focus", "newRoutine")
     key("Return")
@@ -346,10 +346,11 @@ def verify_editor_flow(ipc, key, capture, *, out):
                     "typed minute 36 previews, 75 is ignored, 5 is accepted, presets pick :15",
                     "five previews",
                     "invalid draft retained",
-                    "save leaves the schedule off",
+                    "saving with a time turns the schedule on",
                     "edit reloads schedule, saves revision 2, Escape discards",
-                    "schedule on then off from the routine view",
+                    "schedule off then on from the routine view",
                     "imported routine edited as soon as it opens saves the typed minute",
+                    "imported routine picks Opus 5 from the model chips and saves it",
                     "delete asks first, Keep leaves the routine, Delete removes it",
                 ],
             },
@@ -391,10 +392,14 @@ def verify_sourced_edit(ipc, key, capture, state, skill):
     key("Return")
     wait_until(lambda: state()["editing"] and state()["mode"] == "Daily")
     ipc("test", "set", "field_minute", "36")
+    ipc("test", "focus", "pickModel_claude-opus-5")
+    key("Return")
+    capture("editor-sourced-model")
     ipc("test", "focus", "saveRoutine")
     key("Return")
     wait_until(lambda: not state()["editing"])
     assert imported()[0]["cron"] == "36 9 * * *" and imported()[0]["revision"] == 2, imported()
+    assert imported()[0]["model"] == "claude-opus-5", imported()
     assert state()["skill"] == "", state()
     capture("editor-sourced-edited")
 
@@ -443,7 +448,7 @@ def verify_edit_flow(ipc, key, capture, state, saved):
     )
     edited = [r for r in state()["routines"] if r["name"] == "Keyboard schedule, edited"][0]
     assert edited["id"] == saved["id"] and edited["revision"] == 2, edited
-    assert edited["cron"] == "0 9 * * 1-5" and not edited["enabled"], edited
+    assert edited["cron"] == "0 9 * * 1-5" and edited["enabled"], edited
     assert state()["view"] == "routine"
     capture("editor-edited")
     ipc("test", "focus", "editRoutine")
@@ -454,17 +459,18 @@ def verify_edit_flow(ipc, key, capture, state, saved):
     assert not state()["editing"] and state()["view"] == "routine"
     assert all(r["name"] != "Discard this edit" for r in state()["routines"])
 
-    # Turn the schedule on from the routine view, then off again.
+    # Saving with a time turned the schedule on. Turn it off from the routine
+    # view, then on again.
     def enabled():
         return [r["enabled"] for r in state()["routines"] if r["id"] == saved["id"]][0]
 
     ipc("test", "focus", "toggleEnabled")
     key("Return")
-    wait_until(enabled)
-    capture("schedule-on")
+    wait_until(lambda: not enabled())
+    capture("schedule-off")
     ipc("test", "focus", "toggleEnabled")
     key("Return")
-    wait_until(lambda: not enabled())
+    wait_until(enabled)
     return edited
 
 

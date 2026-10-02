@@ -37,6 +37,7 @@ from omakron.runner import (
     DEFAULT_MODEL,
     DEFAULT_PERMISSION_MODE,
     DEFAULT_TOOLS,
+    MODEL_CHOICES,
     PERMISSION_MODES,
     proc_start_ticks,
     stop_process_group,
@@ -425,6 +426,7 @@ class Service(history.HistoryApi):
         return {
             "cwd": str(Path.home()),
             "model": DEFAULT_MODEL,
+            "models": [dict(choice) for choice in MODEL_CHOICES],
             "timezone": local_timezone(),
             "tools": DEFAULT_TOOLS,
             "permission_mode": DEFAULT_PERMISSION_MODE,
@@ -433,7 +435,6 @@ class Service(history.HistoryApi):
                 "Claude Code runs with its usual tools and no permission prompts. "
                 f"{self.settings.deadline_s:g} second deadline."
             ),
-            "verified_models": [DEFAULT_MODEL],
         }
 
     def op_set_enabled(self, params: dict[str, Any]) -> dict[str, Any]:
@@ -495,10 +496,18 @@ class Service(history.HistoryApi):
         limit = params.get("limit", 30)
         if routine_id is not None and not isinstance(routine_id, str):
             raise ApiError("bad_request", "routine_id must be a string")
+        offset = params.get("offset", 0)
         if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
             raise ApiError("bad_request", "limit must be a positive integer")
-        runs = self._store().list_runs(routine_id=routine_id, limit=limit)
-        return {"runs": [history.summary(r) for r in runs]}
+        if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+            raise ApiError("bad_request", "offset must be a non-negative integer")
+        store = self._store()
+        runs = store.list_runs(routine_id=routine_id, limit=limit, offset=offset)
+        return {
+            "runs": [history.summary(r) for r in runs],
+            "offset": offset,
+            "total": store.count_runs(routine_id=routine_id),
+        }
 
     def op_get_run(self, params: dict[str, Any]) -> dict[str, Any]:
         run_id = params.get("run_id")

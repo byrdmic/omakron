@@ -6,6 +6,7 @@ import pytest
 
 from omakron.runner import (
     BASE_FLAGS,
+    DEFAULT_MODEL,
     Outcome,
     child_env,
     classify,
@@ -53,7 +54,7 @@ def test_ok_run_succeeds_and_keeps_the_result_text(fake_claude):
     verdict = classify(exit_code=run.exit_code, stream=stream)
     assert verdict.outcome is Outcome.SUCCEEDED and verdict.problems == ()
     assert stream.result_text.startswith("The working folder is empty")
-    assert stream.resolved_models == ["claude-sonnet-5"]
+    assert stream.resolved_models == [DEFAULT_MODEL]
 
 
 def test_error_result_is_a_failure_naming_the_message(fake_claude):
