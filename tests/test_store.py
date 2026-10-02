@@ -92,6 +92,28 @@ def test_wait_limit_is_the_one_the_store_was_opened_with(tmp_path):
     store.close()
 
 
+def test_priority_routine_is_claimed_before_older_waiting_runs(tmp_path):
+    store = Store(tmp_path / "priority.db", priority_routines=["urgent"])
+    kwargs = {"prompt": "y", "model": "m", "cwd": "/"}
+    busy = store.create_routine(name="Busy", **kwargs)
+    plain = store.create_routine(name="Plain", **kwargs)
+    urgent = store.create_routine(name="Urgent", routine_id="urgent", **kwargs)
+    queue = {"trigger": "manual", "idempotency_key": None, "deadline_s": 10}
+    active, _ = store.enqueue_run(busy, **queue)
+    assert store.claim_next("w").id == active.id
+    older, _ = store.enqueue_run(plain, **queue)
+    newer, _ = store.enqueue_run(plain, **queue)
+    last, _ = store.enqueue_run(urgent, **queue)
+    assert store.claim_next("w") is None, "a priority run still waits for the active run"
+    order = []
+    for _ in range(3):
+        store.finish_run(active.id, status="succeeded", problems=[])
+        active = store.claim_next("w")
+        order.append(active.id)
+    assert order == [last.id, older.id, newer.id]
+    store.close()
+
+
 def test_finish_requires_an_open_run_and_a_terminal_status(store, routine):
     run, _ = store.enqueue_run(routine, trigger="manual", idempotency_key=None, deadline_s=10)
     with pytest.raises(StoreError):

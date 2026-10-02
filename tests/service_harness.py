@@ -58,6 +58,7 @@ class ServiceHarness:
     root: Path
     deadline_s: float = 600.0
     queue_max_wait_s: float = 14400.0
+    priority_routines: list[str] = field(default_factory=list)
     extra_env: dict[str, str] = field(default_factory=dict)
     proc: subprocess.Popen | None = None
 
@@ -88,6 +89,7 @@ class ServiceHarness:
                     "claude_executable": str(self.wrapper),
                     "deadline_s": self.deadline_s,
                     "queue_max_wait_s": self.queue_max_wait_s,
+                    "priority_routines": self.priority_routines,
                 }
             ),
             encoding="utf-8",

@@ -17,6 +17,7 @@ import json
 import os
 import sqlite3
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -341,9 +342,15 @@ def _run(row: sqlite3.Row) -> Run:
 class Store:
     """One SQLite connection. Open one per thread; SQLite serializes writers."""
 
-    def __init__(self, path: Path | str, queue_max_wait_s: float = DEFAULT_QUEUE_MAX_WAIT_S):
+    def __init__(
+        self,
+        path: Path | str,
+        queue_max_wait_s: float = DEFAULT_QUEUE_MAX_WAIT_S,
+        priority_routines: Sequence[str] = (),
+    ):
         self.path = Path(path)
         self.queue_max_wait_s = queue_max_wait_s
+        self.priority_routines = list(priority_routines)  # routine ids, most important first
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(str(self.path), timeout=10, isolation_level=None)
         self.conn.row_factory = sqlite3.Row
@@ -699,12 +706,13 @@ class Store:
                     )
 
     def claim_next(self, worker: str) -> Run | None:
-        """Claim the oldest queued run for ``worker`` in one transaction.
+        """Claim the next queued run for ``worker`` in one transaction.
 
         Global concurrency is one: nothing is claimed while another run is
         claimed or running, and a queued run waits for it. A run that has
         waited longer than ``queue_max_wait_s`` is marked skipped instead of
-        started late.
+        started late. Runs of ``priority_routines`` go first, in the order
+        the routines are listed. Every other run follows, oldest first.
         """
         now = utc_now()
         with self._tx():
@@ -714,10 +722,12 @@ class Store:
             ).fetchone()
             if active is not None:
                 return None
-            for row in self.conn.execute(
-                "SELECT id, enqueued_at FROM runs WHERE status = ? ORDER BY rowid",
-                (QUEUED,),
-            ).fetchall():
+            queued = self.conn.execute(
+                "SELECT id, routine_id FROM runs WHERE status = ? ORDER BY rowid", (QUEUED,)
+            ).fetchall()
+            ranks = {routine_id: rank for rank, routine_id in enumerate(self.priority_routines)}
+            # The sort is stable, so runs of equal rank stay oldest first.
+            for row in sorted(queued, key=lambda r: ranks.get(r["routine_id"], len(ranks))):
                 cur = self.conn.execute(
                     "UPDATE runs SET status = ?, claimed_at = ?, worker = ?"
                     " WHERE id = ? AND status = ?",

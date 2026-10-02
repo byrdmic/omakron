@@ -128,9 +128,19 @@ and starts when it ends, oldest first, and that includes a manual run. While a
 routine has a run waiting or running, its later slots are skipped, so each
 routine has at most one run in the queue. A run that waits longer than
 `queue_max_wait_s` in `settings.json` (default 14400 seconds) is skipped.
-Waiting does not count against a run's deadline. Checkpoints and local-slot
-guards survive restarts. Interrupted work is never replayed automatically.
-The service does not enable lingering, wake timers, or execution while asleep.
+Waiting does not count against a run's deadline.
+
+To let a routine's waiting run start before the others, list its id under
+`priority_routines` in `settings.json`, most important first. The active run
+is never stopped to make room.
+
+```
+{"priority_routines": ["<routine-id>"]}
+```
+
+Checkpoints and local-slot guards survive restarts. Interrupted work is never
+replayed automatically. The service does not enable lingering, wake timers, or
+execution while asleep.
 
 The raw JSON client also exposes `set_enabled`, `delete_routine`,
 `set_dispatch`, and `schedule_gaps`. For example, stop scheduled dispatch while keeping history:
