@@ -124,10 +124,25 @@ routine that was turned off turns it back on; other edits keep it as it was.
 Pause from the routine view leaves active work alone and removes queued
 scheduled work. Resume schedules the next future occurrence without catch-up.
 
-The service skips missed occurrences beyond 60 seconds, prevents same-routine
-overlap, and expires queued work after five minutes. Checkpoints and local-slot
-guards survive restarts. Interrupted work is never replayed automatically.
-The service does not enable lingering, wake timers, or execution while asleep.
+The service skips missed occurrences beyond 60 seconds and prevents
+same-routine overlap. One run executes at a time. A run queued behind it waits
+and starts when it ends, oldest first, and that includes a manual run. While a
+routine has a run waiting or running, its later slots are skipped, so each
+routine has at most one run in the queue. A run that waits longer than
+`queue_max_wait_s` in `settings.json` (default 14400 seconds) is skipped.
+Waiting does not count against a run's deadline.
+
+To let a routine's waiting run start before the others, list its id under
+`priority_routines` in `settings.json`, most important first. The active run
+is never stopped to make room.
+
+```
+{"priority_routines": ["<routine-id>"]}
+```
+
+Checkpoints and local-slot guards survive restarts. Interrupted work is never
+replayed automatically. The service does not enable lingering, wake timers, or
+execution while asleep.
 
 The raw JSON client also exposes `set_enabled`, `delete_routine`,
 `set_dispatch`, and `schedule_gaps`. For example, stop scheduled dispatch while keeping history:

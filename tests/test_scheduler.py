@@ -7,7 +7,9 @@ from pathlib import Path
 import pytest
 
 from omakron.scheduler import Scheduler, stamp
-from omakron.store import Store, StoreError
+from omakron.store import DEFAULT_QUEUE_MAX_WAIT_S, Store, StoreError
+
+OVERLAP = "an earlier run of this routine is still waiting or running"
 
 
 @pytest.fixture
@@ -59,22 +61,89 @@ def test_same_routine_overlap_is_saved_as_skipped(lab):
     now[0] += dt.timedelta(minutes=1)
     skipped = scheduler.tick(now[0])[0]
     assert store.get_run(skipped).status == "skipped"
-    assert store.get_run(skipped).problems == ["same-routine overlap"]
+    assert store.get_run(skipped).problems == [OVERLAP]
     assert store.get_run(first).status == "claimed"
 
 
-def test_different_routine_waits_and_expires_while_worker_busy(lab):
+def test_different_routine_waits_for_the_active_run_and_starts_when_it_ends(lab):
     store, scheduler, now = lab
     routine(store, "A")
     routine(store, "B")
     scheduler.tick(now[0])
     first = store.claim_next("worker")
     other = [r for r in store.list_runs() if r.id != first.id][0]
-    now[0] += dt.timedelta(seconds=300.001)
+    now[0] += dt.timedelta(hours=2)
+    scheduler.tick(now[0])
+    assert store.claim_next("worker") is None
+    assert store.get_run(other.id).status == "queued"
+    store.finish_run(first.id, status="succeeded", problems=[])
+    assert store.claim_next("worker").id == other.id
+
+
+def test_run_waiting_past_the_limit_is_skipped_and_the_reason_names_the_limit(lab):
+    store, scheduler, now = lab
+    routine(store, "A")
+    routine(store, "B")
+    scheduler.tick(now[0])
+    first = store.claim_next("worker")
+    other = [r for r in store.list_runs() if r.id != first.id][0]
+    now[0] += dt.timedelta(seconds=DEFAULT_QUEUE_MAX_WAIT_S + 0.001)
     scheduler.tick(now[0])
     assert store.get_run(other.id).status == "skipped"
-    assert "not started within 300 s" in store.get_run(other.id).problems[0]
+    assert store.get_run(other.id).problems == [
+        "waited longer than the 14400 s limit (queue_max_wait_s)"
+    ]
     assert store.get_run(first.id).status == "claimed"
+
+
+def test_slots_missed_during_a_long_run_become_one_late_run(lab):
+    """One routine runs 10:30 to 14:20 while another is due every hour."""
+    store, scheduler, now = lab
+    long_routine = routine(store, "Long", cron="30 10 * * *")
+    hourly = routine(store, "Hourly", cron="0 * * * *")
+
+    def tick_each_minute_until(hour, minute):
+        while now[0] < dt.datetime(2026, 9, 12, hour, minute, tzinfo=dt.UTC):
+            now[0] += dt.timedelta(minutes=1)
+            scheduler.tick(now[0])
+
+    now[0] = dt.datetime(2026, 9, 12, 10, 30, tzinfo=dt.UTC)
+    scheduler.tick(now[0])
+    blocker = store.claim_next("worker")
+    assert blocker.routine_id == long_routine.id
+    tick_each_minute_until(14, 20)
+    assert store.claim_next("worker") is None
+    store.finish_run(blocker.id, status="succeeded", problems=[])
+    late = store.claim_next("worker")
+    assert (late.routine_id, late.scheduled_at) == (hourly.id, "2026-09-12T11:00:00.000Z")
+    store.finish_run(late.id, status="succeeded", problems=[])
+    tick_each_minute_until(15, 0)
+    assert store.claim_next("worker").scheduled_at == "2026-09-12T15:00:00.000Z"
+    runs = reversed(store.list_runs(routine_id=hourly.id))
+    assert [(r.scheduled_at[11:16], r.status, r.problems) for r in runs] == [
+        ("11:00", "succeeded", []),
+        ("12:00", "skipped", [OVERLAP]),
+        ("13:00", "skipped", [OVERLAP]),
+        ("14:00", "skipped", [OVERLAP]),
+        ("15:00", "claimed", []),
+    ]
+
+
+def test_manual_run_waits_for_another_routines_run(lab):
+    store, scheduler, now = lab
+    routine(store, "Scheduled")
+    manual = store.create_routine(
+        name="Manual", prompt="Original", model="fake", cwd=str(store.path.parent)
+    )
+    scheduler.tick(now[0])
+    first = store.claim_next("worker")
+    pressed, _ = store.enqueue_run(manual, trigger="manual", idempotency_key=None, deadline_s=10)
+    now[0] += dt.timedelta(hours=1)
+    scheduler.tick(now[0])
+    assert store.claim_next("worker") is None
+    assert store.get_run(pressed.id).status == "queued"
+    store.finish_run(first.id, status="succeeded", problems=[])
+    assert store.claim_next("worker").id == pressed.id
 
 
 def test_pause_removes_queued_schedule_but_leaves_active_run(lab):

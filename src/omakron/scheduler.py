@@ -107,5 +107,9 @@ class Scheduler:
             (routine.id, slot, routine.revision, run.id),
         )
         if overlap:
-            self.store.finish_run(run.id, status="skipped", problems=["same-routine overlap"])
+            self.store.finish_run(
+                run.id,
+                status="skipped",
+                problems=["an earlier run of this routine is still waiting or running"],
+            )
         return run.id

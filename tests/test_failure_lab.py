@@ -1,11 +1,15 @@
 """Deterministic failures use only disposable data and the fake executable."""
 
 import datetime as dt
+import threading
 
 import pytest
 
 from omakron.runner import STOP_CANCEL, supervise
-from omakron.store import Store
+from omakron.scheduler import stamp
+from omakron.store import DEFAULT_QUEUE_MAX_WAIT_S, Store
+from omakron.worker import Worker, WorkerConfig
+from tests.conftest import FAKE_CLAUDE
 from tests.test_supervise import group_alive, launch
 
 
@@ -39,8 +43,8 @@ def test_cancellation_at_known_fake_clock_tick(tmp_path, fake_clock):
     assert not group_alive(result.pgid)
 
 
-@pytest.mark.parametrize("age,claimed", [(299.999, True), (300, True), (300.001, False)])
-def test_queue_expiry_at_exact_fake_time(tmp_path, monkeypatch, age, claimed):
+@pytest.mark.parametrize("past_limit,claimed", [(-0.001, True), (0, True), (0.001, False)])
+def test_queue_wait_limit_at_exact_fake_time(tmp_path, monkeypatch, past_limit, claimed):
     now = dt.datetime(2026, 9, 12, 12, tzinfo=dt.UTC)
     monkeypatch.setattr(
         "omakron.store.utc_now",
@@ -49,9 +53,27 @@ def test_queue_expiry_at_exact_fake_time(tmp_path, monkeypatch, age, claimed):
     store = Store(tmp_path / "lab.db")
     routine = store.create_routine(name="Fake", prompt="fake", model="fake", cwd=str(tmp_path))
     run, _ = store.enqueue_run(routine, trigger="manual", idempotency_key="request", deadline_s=1)
-    now += dt.timedelta(seconds=age)
+    now += dt.timedelta(seconds=DEFAULT_QUEUE_MAX_WAIT_S + past_limit)
     assert bool(store.claim_next("lab")) is claimed
     assert store.get_run(run.id).status == ("claimed" if claimed else "skipped")
+    store.close()
+
+
+def test_time_spent_waiting_does_not_count_against_the_deadline(tmp_path):
+    store = Store(tmp_path / "lab.db")
+    routine = store.create_routine(name="Fake", prompt="fake", model="fake", cwd=str(tmp_path))
+    run, _ = store.enqueue_run(routine, trigger="manual", idempotency_key=None, deadline_s=30)
+    three_hours_ago = stamp(dt.datetime.now(dt.UTC) - dt.timedelta(hours=3))
+    store.conn.execute("UPDATE runs SET enqueued_at=? WHERE id=?", (three_hours_ago, run.id))
+    worker = Worker(
+        store_factory=lambda: store,
+        config=WorkerConfig(str(FAKE_CLAUDE), tmp_path / "runs", tmp_path / "work"),
+        worker_id="lab",
+        wake=threading.Event(),
+        stopping=threading.Event(),
+    )
+    assert worker.run_once()
+    assert store.get_run(run.id).status == "succeeded"
     store.close()
 
 

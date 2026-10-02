@@ -81,7 +81,7 @@ Each module has a docstring stating its contract. Read that first.
 - `routines.py` validates a routine draft, including the execution choices. A draft with a `source` folder takes its prompt and default name from that folder's SKILL.md.
 - `skills.py` parses a SKILL.md's front matter and body. A routine's `source` is that file's location, or the folder holding it. The worker reads the file again at every launch and records the text it sent.
 - `seed.py` defines the routine an empty database starts with: tools on, manual, paused.
-- `schedule.py` and `scheduler.py` share one cron evaluator for previews and dispatch. Missed occurrences beyond 60 seconds are skipped, same-routine overlap is prevented, and queued work expires after five minutes.
+- `schedule.py` and `scheduler.py` share one cron evaluator for previews and dispatch. Missed occurrences beyond 60 seconds are skipped, same-routine overlap is prevented, and a queued run waits for the active run up to `queue_max_wait_s` (default four hours). Waiting runs of the routines in `priority_routines` are claimed first.
 - `history.py` builds run summaries and details and handles retention cleanup.
 - `plugin.py` mirrors the shell's manifest validation so CI can refuse what the shell would refuse.
 - `manage.py` is the standard-library-only installer, backup, upgrade, rollback, and uninstall.

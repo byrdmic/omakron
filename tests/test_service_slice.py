@@ -302,6 +302,41 @@ def test_cancel_queued_run_ends_it_before_start(service: ServiceHarness):
     assert len(service.launches()) == 1
 
 
+def test_queued_run_past_the_configured_wait_limit_is_skipped(service_factory):
+    svc = service_factory("wait", queue_max_wait_s=1.0)
+    assert svc.request("status")["service"]["queue_max_wait_s"] == 1.0
+    svc.set_mode("hang")
+    first = svc.run_now(key="first")["run"]
+    svc.wait_status(first["id"], "running")
+    second = svc.wait_run(svc.run_now(key="second")["run"]["id"])
+    assert second["status"] == "skipped"
+    assert second["problems"] == ["waited longer than the 1 s limit (queue_max_wait_s)"]
+    svc.request("cancel_run", {"run_id": first["id"]})
+    svc.wait_run(first["id"])
+    assert len(svc.launches()) == 1
+
+
+def test_priority_routine_starts_before_an_older_waiting_run(service_factory, tmp_path):
+    svc = service_factory("priority", priority_routines=[seed.ROUTINE_ID])
+    assert svc.request("status")["service"]["priority_routines"] == [seed.ROUTINE_ID]
+    folder = tmp_path / "other"
+    folder.mkdir()
+    other = svc.request(
+        "create_routine", {"name": "Other", "prompt": "Say hello.", "cwd": str(folder)}
+    )["routine"]
+    svc.set_mode("hang")
+    active = svc.request("run_now", {"routine_id": other["id"]})["run"]
+    svc.wait_status(active["id"], "running")
+    older = svc.request("run_now", {"routine_id": other["id"]})["run"]
+    priority = svc.run_now()["run"]
+    svc.request("cancel_run", {"run_id": active["id"]})
+    svc.wait_status(priority["id"], "running")
+    assert svc.get_run(older["id"])["status"] == "queued"
+    svc.request("cancel_run", {"run_id": older["id"]})
+    svc.request("cancel_run", {"run_id": priority["id"]})
+    svc.wait_run(priority["id"])
+
+
 def test_deadline_turns_a_hang_into_timed_out(service_factory):
     svc = service_factory("deadline", deadline_s=1.0)
     svc.set_mode("hang")

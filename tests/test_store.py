@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import sqlite3
 from pathlib import Path
 
 import pytest
 
-from omakron.store import QUEUE_EXPIRY_S, Store, StoreError
+from omakron.store import Store, StoreError, parse_utc, utc_now
 
 
 @pytest.fixture
@@ -88,7 +89,43 @@ def test_stale_queued_run_is_skipped_not_started(store, routine):
     assert store.claim_next("w") is None
     skipped = store.get_run(run.id)
     assert skipped.status == "skipped"
-    assert skipped.problems == [f"not started within {int(QUEUE_EXPIRY_S)} s of queueing"]
+    assert skipped.problems == ["waited longer than the 14400 s limit (queue_max_wait_s)"]
+
+
+def test_wait_limit_is_the_one_the_store_was_opened_with(tmp_path):
+    store = Store(tmp_path / "limit.db", queue_max_wait_s=60)
+    routine = store.create_routine(name="x", prompt="y", model="m", cwd="/")
+    stale, _ = store.enqueue_run(routine, trigger="manual", idempotency_key=None, deadline_s=10)
+    fresh, _ = store.enqueue_run(routine, trigger="manual", idempotency_key=None, deadline_s=10)
+    old = (parse_utc(utc_now()) - dt.timedelta(seconds=90)).isoformat()
+    store.conn.execute("UPDATE runs SET enqueued_at = ? WHERE id = ?", (old, stale.id))
+    assert store.claim_next("w").id == fresh.id
+    assert store.get_run(stale.id).problems == [
+        "waited longer than the 60 s limit (queue_max_wait_s)"
+    ]
+    store.close()
+
+
+def test_priority_routine_is_claimed_before_older_waiting_runs(tmp_path):
+    store = Store(tmp_path / "priority.db", priority_routines=["urgent"])
+    kwargs = {"prompt": "y", "model": "m", "cwd": "/"}
+    busy = store.create_routine(name="Busy", **kwargs)
+    plain = store.create_routine(name="Plain", **kwargs)
+    urgent = store.create_routine(name="Urgent", routine_id="urgent", **kwargs)
+    queue = {"trigger": "manual", "idempotency_key": None, "deadline_s": 10}
+    active, _ = store.enqueue_run(busy, **queue)
+    assert store.claim_next("w").id == active.id
+    older, _ = store.enqueue_run(plain, **queue)
+    newer, _ = store.enqueue_run(plain, **queue)
+    last, _ = store.enqueue_run(urgent, **queue)
+    assert store.claim_next("w") is None, "a priority run still waits for the active run"
+    order = []
+    for _ in range(3):
+        store.finish_run(active.id, status="succeeded", problems=[])
+        active = store.claim_next("w")
+        order.append(active.id)
+    assert order == [last.id, older.id, newer.id]
+    store.close()
 
 
 def test_finish_requires_an_open_run_and_a_terminal_status(store, routine):
