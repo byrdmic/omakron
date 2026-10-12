@@ -6,11 +6,16 @@ routine's tools and permission mode under :func:`omakron.runner.supervise`,
 records how the process ended, stores the model's result durably, and only
 then writes the terminal status. A step that cannot store its output turns the
 run into a failure, because a success the service cannot show is not one.
+A run that ends failed or timed out also raises one desktop notification
+through ``notify-send``, so a routine that breaks overnight is seen in the
+morning without opening the popup.
 """
 
 from __future__ import annotations
 
 import logging
+import shutil
+import subprocess
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -36,12 +41,30 @@ from omakron.store import Run, Store
 
 log = logging.getLogger("omakron.worker")
 
+NOTIFY_STATUSES = (Outcome.FAILED, Outcome.TIMED_OUT)
+NOTIFY_TIMEOUT_S = 5.0
+
+
+def notify_desktop(title: str, body: str) -> None:
+    """Best effort ``notify-send``. Title and body travel as argv, never shell text."""
+    command = shutil.which("notify-send")
+    if command is None:
+        return
+    subprocess.run(
+        [command, "--app-name=Omakron", "--urgency=critical", "--", title, body],
+        check=False,
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        timeout=NOTIFY_TIMEOUT_S,
+    )
+
 
 @dataclass(frozen=True, slots=True)
 class WorkerConfig:
     claude_executable: str
     runs_dir: Path
     managed_workdir: Path  # the only place the worker will create a working folder
+    notify: Callable[[str, str], None] = notify_desktop
 
 
 class Worker:
@@ -95,8 +118,22 @@ class Worker:
     def _fail(self, run: Run, problems: list[str], **extra: Any) -> None:
         log.warning("run %s failed: %s", run.id, problems)
         self.store.finish_run(run.id, status=Outcome.FAILED, problems=problems, **extra)
+        self._notify(run.id)
         if extra.get("output_dir"):
             self._write_log(run.id, Path(extra["output_dir"]), None, None)
+
+    def _notify(self, run_id: str) -> None:
+        """One desktop notification per failed or timed-out run. The status is already durable."""
+        try:
+            final = self.store.get_run(run_id)
+            if final.status not in NOTIFY_STATUSES:
+                return
+            explanation = history.failure(final)
+            title = f"{final.routine_snapshot['name']}: run {final.status.replace('_', ' ')}"
+            body = "\n".join(part for part in (*final.problems[:1], explanation["help"]) if part)
+            self.config.notify(title, body)
+        except Exception:
+            log.exception("run %s: desktop notification was not sent", run_id)
 
     def _write_log(self, run_id: str, out_dir: Path, stream: Any, stderr_tail: str | None) -> None:
         """``log.md``: the readable account. Best effort; the status is already durable."""
@@ -235,4 +272,5 @@ class Worker:
             stderr_tail=supervised.stderr_tail or None,
         )
         log.info("run %s ended %s", run.id, verdict.outcome)
+        self._notify(run.id)
         self._write_log(run.id, out_dir, stream, supervised.stderr_tail or None)
