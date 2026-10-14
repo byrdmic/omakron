@@ -83,6 +83,13 @@ class ServiceHarness:
             encoding="utf-8",
         )
         self.wrapper.chmod(0o755)
+        # The worker notifies the desktop about failed runs; tests record those instead.
+        self.notify_log = self.root / "notifications.log"
+        notify = self.wrapper.parent / "notify-send"
+        notify.write_text(
+            f'#!/bin/sh\nprintf "%s\\n" "$@" >> {self.notify_log}\n', encoding="utf-8"
+        )
+        notify.chmod(0o755)
         (self.config / "settings.json").write_text(
             json.dumps(
                 {
@@ -99,7 +106,7 @@ class ServiceHarness:
 
     def env(self) -> dict[str, str]:
         env = {
-            "PATH": os.environ.get("PATH", ""),
+            "PATH": f"{self.wrapper.parent}:{os.environ.get('PATH', '')}",
             "HOME": str(self.root / "home"),
             "PYTHONPATH": str(REPO_ROOT / "src"),
             "XDG_RUNTIME_DIR": str(self.socket.parent),

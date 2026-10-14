@@ -76,7 +76,7 @@ Each module has a docstring stating its contract. Read that first.
 - `ipc.py` frames one bounded JSON object per line. Requests over 64 KiB and responses over 1 MiB are refused.
 - `service.py` owns the socket API, settings, and the single worker thread. It seeds the "Folder summary" routine on an empty database and marks orphaned runs interrupted on restart.
 - `store.py` is SQLite under `$XDG_STATE_HOME/omakron`. Runs are claimed in one `BEGIN IMMEDIATE` transaction, carry an immutable routine revision, and reach a terminal status only after output is durably written.
-- `worker.py` executes one run in a fixed order: claim, launch, record, store. The prompt goes to the CLI on stdin.
+- `worker.py` executes one run in a fixed order: claim, launch, record, store. The prompt goes to the CLI on stdin. A run that ends failed or timed out raises one desktop notification through `notify-send`.
 - `runner.py` builds the Claude invocation from the routine's tools, permission mode, MCP config, and environment keys, supervises the process with a deadline and bounded output, and records the outcome. A run succeeds on exit status zero and a result event without an error. Tool use is never a failure.
 - `routines.py` validates a routine draft, including the execution choices. A draft with a `source` folder takes its prompt and default name from that folder's SKILL.md.
 - `skills.py` parses a SKILL.md's front matter and body. A routine's `source` is that file's location, or the folder holding it. The worker reads the file again at every launch and records the text it sent.

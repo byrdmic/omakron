@@ -8,7 +8,7 @@ import pytest
 from omakron.runner import STOP_CANCEL, supervise
 from omakron.scheduler import stamp
 from omakron.store import DEFAULT_QUEUE_MAX_WAIT_S, Store
-from omakron.worker import Worker, WorkerConfig
+from omakron.worker import Worker, WorkerConfig, notify_desktop
 from tests.conftest import FAKE_CLAUDE
 from tests.test_supervise import group_alive, launch
 
@@ -94,3 +94,74 @@ def test_duplicate_request_after_restart_returns_original_interrupted_run(tmp_pa
     assert not created and same.id == run.id and same.status == "interrupted"
     assert store.claim_next("after-crash") is None
     store.close()
+
+
+def _run_worker(tmp_path, mode: str, notify) -> str:
+    store = Store(tmp_path / "lab.db")
+    routine = store.create_routine(
+        name="Fake",
+        prompt="fake",
+        model="fake",
+        cwd=str(tmp_path),
+        env_passthrough=["FAKE_CLAUDE_MODE"],
+    )
+    run, _ = store.enqueue_run(routine, trigger="manual", idempotency_key=None, deadline_s=30)
+    worker = Worker(
+        store_factory=lambda: store,
+        config=WorkerConfig(str(FAKE_CLAUDE), tmp_path / "runs", tmp_path / "work", notify=notify),
+        worker_id="lab",
+        wake=threading.Event(),
+        stopping=threading.Event(),
+    )
+    assert worker.run_once()
+    status = store.get_run(run.id).status
+    store.close()
+    return status
+
+
+def test_failed_run_sends_one_desktop_notification(tmp_path, monkeypatch):
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "error")
+    sent: list[tuple[str, str]] = []
+    assert _run_worker(tmp_path, "error", lambda t, b: sent.append((t, b))) == "failed"
+    assert len(sent) == 1
+    title, body = sent[0]
+    assert title == "Fake: run failed"
+    assert body.startswith("exit status 1")
+    assert "retry explicitly" in body
+
+
+def test_succeeded_run_sends_no_notification(tmp_path, monkeypatch):
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "ok")
+    sent: list[tuple[str, str]] = []
+    assert _run_worker(tmp_path, "ok", lambda t, b: sent.append((t, b))) == "succeeded"
+    assert sent == []
+
+
+def test_notification_failure_does_not_change_the_run(tmp_path, monkeypatch):
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "error")
+
+    def broken(title, body):
+        raise RuntimeError("no session bus")
+
+    assert _run_worker(tmp_path, "error", broken) == "failed"
+
+
+def test_notify_desktop_passes_text_as_arguments(tmp_path, monkeypatch):
+    fake = tmp_path / "notify-send"
+    fake.write_text('#!/bin/sh\nprintf "%s\\0" "$@" > "$0.args"\n')
+    fake.chmod(0o700)
+    monkeypatch.setenv("PATH", str(tmp_path))
+    notify_desktop("Fake: run failed", "exit status 1\nretry")
+    args = (tmp_path / "notify-send.args").read_text().split("\0")
+    assert args[:-1] == [
+        "--app-name=Omakron",
+        "--urgency=critical",
+        "--",
+        "Fake: run failed",
+        "exit status 1\nretry",
+    ]
+
+
+def test_notify_desktop_without_notify_send_is_silent(tmp_path, monkeypatch):
+    monkeypatch.setenv("PATH", str(tmp_path))
+    notify_desktop("title", "body")
