@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "omakron.routines",
   "name": "Omakron",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": "Omakron contributors",
   "license": "MIT",
   "description": "Scheduled local Claude Code routines in a native Omarchy bar panel.",
