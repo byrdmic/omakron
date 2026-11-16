@@ -56,7 +56,7 @@ def validate(draft: dict[str, Any], managed_workdir: Path) -> dict[str, Any]:
     if model is None or model == "":
         model = DEFAULT_MODEL
     if not isinstance(model, str) or not re.fullmatch(MODEL_PATTERN, model):
-        raise ValueError("model must be a model id or alias, such as claude-fable-5-1 or opus")
+        raise ValueError("model must be a model id or alias, such as claude-fable-5-2 or opus")
     cwd = draft.get("cwd")
     if not isinstance(cwd, str) or not cwd or any(c in cwd for c in ("\n", "\r", "\0")):
         raise ValueError("working folder must be an absolute path")

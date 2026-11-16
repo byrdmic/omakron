@@ -102,7 +102,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="a skill folder; its SKILL.md is the prompt, read again at every run",
     )
     create.add_argument(
-        "--model", help="a model id or alias, such as claude-opus-5 or opus; default: the service's"
+        "--model",
+        help="a model id or alias, such as claude-opus-5-5 or opus; default: the service's",
     )
     create.add_argument("--cwd", required=True)
     create.add_argument("--enabled", action="store_true")

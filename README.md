@@ -78,8 +78,8 @@ and paused. It asks the model to describe its working folder and write
 and the result is read back later with `run` or `runs`.
 
 Each routine chooses how Claude Code runs. `model` is the CLI's `--model`
-value, a model id or alias such as `claude-opus-5` or `opus`; new routines
-start on `claude-fable-5-1`. `tools` is the CLI's `--tools`
+value, a model id or alias such as `claude-opus-5-5` or `opus`; new routines
+start on `claude-fable-5-2`. `tools` is the CLI's `--tools`
 value (`default`, `""`, or a comma-separated list), `permission_mode` is one
 of the CLI's modes (`bypassPermissions` by default, since nobody answers
 prompts during a scheduled run), `mcp_config` is an optional path to an MCP
@@ -154,7 +154,7 @@ printf '%s' '{"op":"set_dispatch","params":{"enabled":false}}' | python scripts/
 
 ## Installation and recovery
 
-Omakron 0.1.0 has a preview-first installer and a separate service setup step.
+Omakron 0.2.0 has a preview-first installer and a separate service setup step.
 Read [the installation guide](docs/INSTALL.md) for exact revision installation,
 compatibility checks, private backups, upgrade, rollback, and retained-data uninstall.
 Run `python scripts/manage.py <action>` to preview an action before applying it.

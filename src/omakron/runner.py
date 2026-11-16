@@ -27,14 +27,14 @@ from pathlib import Path
 # The model a new routine starts with, and the ones the editor offers by name.
 # A routine may name any model id or CLI alias the signed-in account can use;
 # the CLI resolves it and an unknown one fails the run with the CLI's message.
-DEFAULT_MODEL = "claude-fable-5-1"
+DEFAULT_MODEL = "claude-fable-5-2"
 MODEL_CHOICES: tuple[dict[str, str], ...] = (
-    {"value": "claude-fable-5-1", "label": "Fable 5.1"},
-    {"value": "claude-opus-5", "label": "Opus 5"},
-    {"value": "claude-sonnet-5", "label": "Sonnet 5"},
-    {"value": "claude-haiku-4-5", "label": "Haiku 4.5"},
+    {"value": "claude-fable-5-2", "label": "Fable 5.2"},
+    {"value": "claude-opus-5-5", "label": "Opus 5.5"},
+    {"value": "claude-sonnet-5-5", "label": "Sonnet 5.5"},
+    {"value": "claude-haiku-5-5", "label": "Haiku 5.5"},
 )
-# A model id such as claude-opus-5 or a CLI alias such as opus or sonnet[1m].
+# A model id such as claude-opus-5-5 or a CLI alias such as opus or sonnet[1m].
 # It never starts with a dash, so it can never be read as a flag.
 MODEL_PATTERN = r"[a-z0-9][a-z0-9.\[\]-]{0,100}"
 

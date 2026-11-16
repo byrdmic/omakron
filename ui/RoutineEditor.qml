@@ -109,7 +109,7 @@ Column {
   function load(saved) {
     fill(name, saved.name || "")
     fill(prompt, saved.prompt || "")
-    modelField.text = saved.model || root.defaults.model || "claude-fable-5-1"
+    modelField.text = saved.model || root.defaults.model || "claude-fable-5-2"
     folder.text = saved.cwd || root.defaults.cwd || ""
     tools.text = saved.tools === null || saved.tools === undefined ? (root.defaults.tools || "default") : saved.tools
     timezone.text = saved.timezone || root.defaults.timezone || "UTC"
@@ -656,7 +656,7 @@ Column {
       Row {
         spacing: Style.space(4)
         Repeater {
-          model: root.defaults.models || [{value:"claude-fable-5-1",label:"Fable 5.1"},{value:"claude-opus-5",label:"Opus 5"},{value:"claude-sonnet-5",label:"Sonnet 5"},{value:"claude-haiku-4-5",label:"Haiku 4.5"}]
+          model: root.defaults.models || [{value:"claude-fable-5-2",label:"Fable 5.2"},{value:"claude-opus-5-5",label:"Opus 5.5"},{value:"claude-sonnet-5-5",label:"Sonnet 5.5"},{value:"claude-haiku-5-5",label:"Haiku 5.5"}]
           Button {
             required property var modelData
             objectName: "pickModel_" + modelData.value
@@ -673,8 +673,8 @@ Column {
         id: modelField
         objectName: "field_model"
         width: parent.width
-        text: root.defaults.model || "claude-fable-5-1"
-        placeholderText: "claude-fable-5-1"
+        text: root.defaults.model || "claude-fable-5-2"
+        placeholderText: "claude-fable-5-2"
         Accessible.name: "Claude model"
         onActiveFocusChanged: if (activeFocus) root.revealRequested(modelField)
       }

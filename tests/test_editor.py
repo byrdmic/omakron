@@ -168,13 +168,13 @@ def test_create_from_a_skill_folder_takes_name_and_prompt_from_skill_md(service,
 
 def test_model_is_a_choice_on_its_own_and_accepts_the_cli_aliases(service):
     defaults = service.request("editor_defaults")
-    assert defaults["model"] == "claude-fable-5-1"
-    assert defaults["models"][0] == {"value": "claude-fable-5-1", "label": "Fable 5.1"}
+    assert defaults["model"] == "claude-fable-5-2"
+    assert defaults["models"][0] == {"value": "claude-fable-5-2", "label": "Fable 5.2"}
     offered = {choice["value"] for choice in defaults["models"]}
-    assert offered >= {"claude-opus-5", "claude-sonnet-5"}
-    for chosen in ("opus", "sonnet[1m]", "claude-opus-5", "", None):
+    assert offered >= {"claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"}
+    for chosen in ("opus", "sonnet[1m]", "claude-opus-5-5", "", None):
         saved = service.request("create_routine", dict(draft(service), model=chosen))["routine"]
-        assert saved["model"] == (chosen or "claude-fable-5-1"), chosen
+        assert saved["model"] == (chosen or "claude-fable-5-2"), chosen
     with pytest.raises(ServiceError):
         service.request("create_routine", dict(draft(service), model="opus 5"))
 
@@ -183,17 +183,17 @@ def test_a_sourced_routine_changes_its_model_and_keeps_the_skill_prompt(service,
     folder = skill_folder(tmp_path)
     params = dict(draft(service), name="", prompt="", source=str(folder))
     saved = service.request("create_routine", params)["routine"]
-    assert saved["model"] == "claude-fable-5-1"
+    assert saved["model"] == "claude-fable-5-2"
     edited = service.request(
         "update_routine",
         dict(
             saved,
-            model="claude-opus-5",
+            model="claude-opus-5-5",
             routine_id=saved["id"],
             expected_revision=saved["revision"],
         ),
     )["routine"]
-    assert edited["model"] == "claude-opus-5" and edited["revision"] == 2
+    assert edited["model"] == "claude-opus-5-5" and edited["revision"] == 2
     assert edited["source"] == str(folder) and edited["prompt"] == saved["prompt"]
     assert edited["name"] == "folder-notes"
 
