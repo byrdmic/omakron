@@ -170,7 +170,7 @@ printf '%s' '{"op":"set_dispatch","params":{"enabled":false}}' | python scripts/
 
 ## Installation and recovery
 
-Omakron 0.3.0 has a preview-first installer and a separate service setup step.
+Omakron 0.3.1 has a preview-first installer and a separate service setup step.
 Read [the installation guide](docs/INSTALL.md) for exact revision installation,
 compatibility checks, private backups, upgrade, rollback, and retained-data uninstall.
 Run `python scripts/manage.py <action>` to preview an action before applying it.

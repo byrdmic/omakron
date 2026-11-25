@@ -1,4 +1,4 @@
-# Install and recover Omakron 0.3.0
+# Install and recover Omakron 0.3.1
 
 This release was verified on Omarchy 4.0.2-1, Quickshell 0.3.1, Python 3.14, and Claude Code 2.1.270.
 Setup and the installed service refuse anything older and accept anything newer,

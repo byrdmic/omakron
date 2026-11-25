@@ -16,4 +16,4 @@
 - ``checks``    command-line entry point CI uses for the product checks
 """
 
-__version__ = "0.3.0"
+__version__ = "0.3.1"
