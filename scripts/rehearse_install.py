@@ -139,7 +139,7 @@ class Rehearsal:
         set_widget(self.layout.shell, True)
         assert shell_without_plugin(json.loads(self.layout.shell.read_text())) == original_shell
         backup = self.manager.upgrade(str(REPO), revision)
-        assert self.schema() == "3"
+        assert self.schema() == "5"
         assert self.request("get_run", {"run_id": original["id"]})["run"]["result_text"] == report
         assert not self.request("status")["service"]["dispatch_enabled"]
         # Verify the actual cloned UI inside a copied native Omarchy shell.
@@ -184,7 +184,7 @@ class Rehearsal:
                     "old_revision": old,
                     "candidate_revision": revision,
                     "old_schema": int(baseline_schema),
-                    "new_schema": 3,
+                    "new_schema": 5,
                     "restored_schema": int(baseline_schema),
                     "retained_run": original["id"],
                     "retained_result_sha256": hashlib.sha256(report.encode()).hexdigest(),

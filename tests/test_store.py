@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from omakron import history
 from omakron.store import Store, StoreError, parse_utc, utc_now
 
 
@@ -211,10 +212,51 @@ def test_v3_upgrade_adds_the_source_column_and_keeps_execution_choices(tmp_path)
     assert routine.permission_mode == "plan" and routine.prompt == "p"
     assert (
         store.conn.execute("SELECT value FROM schema_meta WHERE key='schema_version'").fetchone()[0]
-        == "4"
+        == "5"
     )
     assert next(tmp_path.glob("*.v3-*.backup")).is_file()
     store.close()
+
+
+@pytest.mark.parametrize("version", [1, 2, 3, 4])
+def test_upgrade_to_v5_leaves_old_runs_without_a_claude_version(tmp_path, version):
+    path = tmp_path / "old.db"
+    fixture = Path(__file__).parent / f"fixtures/schema-v{version}.sql"
+    with sqlite3.connect(path) as connection:
+        connection.executescript(fixture.read_text())
+        connection.execute("INSERT INTO schema_meta VALUES('schema_version',?)", (str(version),))
+        connection.execute(
+            "INSERT INTO routines(id,revision,name,prompt,model,cwd,schedule_kind,"
+            "created_at,updated_at) VALUES('r',1,'n','p','fake','/','manual','2026','2026')"
+        )
+        connection.execute(
+            "INSERT INTO runs(id,routine_id,routine_revision,trigger,routine_snapshot,status,"
+            "enqueued_at,deadline_s,requested_model,resolved_model)"
+            " VALUES('old','r',1,'manual','{\"name\":\"n\"}','succeeded','2026',10,'fake','fake-1')"
+        )
+    store = Store(path)
+    version_row = store.conn.execute("SELECT value FROM schema_meta WHERE key='schema_version'")
+    assert version_row.fetchone()[0] == "5"
+    old = store.get_run("old")
+    assert old.resolved_model == "fake-1"
+    assert old.to_dict()["claude_version"] is None
+    assert history.summary(old)["claude_version"] is None
+    assert "- Claude Code: n/a" in history.render_log(old, None, None)
+    new, _ = store.enqueue_run(
+        store.get_routine("r"), trigger="manual", idempotency_key=None, deadline_s=10
+    )
+    store.finish_run(new.id, status="succeeded", problems=[], claude_version="9.8.7")
+    store.close()
+
+    backup = next(tmp_path.glob(f"*.v{version}-*.backup"))
+    with sqlite3.connect(backup) as connection:
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(runs)")}
+    assert "claude_version" not in columns
+
+    reopened = Store(path)
+    assert reopened.get_run(new.id).claude_version == "9.8.7"
+    assert reopened.get_run("old").claude_version is None
+    reopened.close()
 
 
 def test_source_is_saved_snapshotted_and_the_sent_prompt_is_recorded(store, tmp_path):
