@@ -78,6 +78,7 @@ class Worker:
         worker_id: str,
         wake: threading.Event,
         stopping: threading.Event,
+        before_claim: Callable[[Store], None] = lambda store: None,
     ):
         self._store_factory = store_factory
         self._store: Store | None = None
@@ -85,6 +86,7 @@ class Worker:
         self.worker_id = worker_id
         self.wake = wake
         self.stopping = stopping
+        self.before_claim = before_claim
 
     # ------------------------------------------------------------------- loop
 
@@ -106,7 +108,10 @@ class Worker:
                 self.wake.clear()
 
     def run_once(self) -> bool:
-        run = self.store.claim_next(self.worker_id)
+        # One transaction, so a settings change answered before this claim applies to it.
+        with self.store._tx():
+            self.before_claim(self.store)
+            run = self.store.claim_next(self.worker_id)
         if run is None:
             return False
         log.info("claimed run %s (%s)", run.id, run.routine_snapshot["name"])

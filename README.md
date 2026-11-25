@@ -140,6 +140,17 @@ is never stopped to make room.
 {"priority_routines": ["<routine-id>"]}
 ```
 
+A client can read and change three settings without a restart: `deadline_s`,
+`queue_max_wait_s`, and `priority_routines`. `service_settings` with no params
+returns all three. Any subset replaces those in `settings.json`, keeps every
+other key there, and returns all three. Runs already queued keep the deadline
+they were given. A refused or failed change leaves the file and the running
+service as they were.
+
+```
+printf '%s' '{"op":"service_settings","params":{"deadline_s":1800}}' | python scripts/client.py request
+```
+
 Checkpoints and local-slot guards survive restarts. Interrupted work is never
 replayed automatically. The service does not enable lingering, wake timers, or
 execution while asleep.
@@ -154,7 +165,7 @@ printf '%s' '{"op":"set_dispatch","params":{"enabled":false}}' | python scripts/
 
 ## Installation and recovery
 
-Omakron 0.2.0 has a preview-first installer and a separate service setup step.
+Omakron 0.3.0 has a preview-first installer and a separate service setup step.
 Read [the installation guide](docs/INSTALL.md) for exact revision installation,
 compatibility checks, private backups, upgrade, rollback, and retained-data uninstall.
 Run `python scripts/manage.py <action>` to preview an action before applying it.
