@@ -19,6 +19,7 @@ import subprocess
 import sys
 import tempfile
 import uuid
+from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -215,7 +216,9 @@ class Manager:
 
     def disable_dispatch(self) -> None:
         if self.layout.database.exists():
-            with sqlite3.connect(self.layout.database) as database:
+            # Close here. A connection left for the garbage collector can delete the
+            # write-ahead files while a backup is copying them.
+            with closing(sqlite3.connect(self.layout.database)) as database, database:
                 database.execute(
                     "INSERT INTO schema_meta(key,value) VALUES('dispatch_enabled','false')"
                     " ON CONFLICT(key) DO UPDATE SET value='false'"
