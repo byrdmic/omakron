@@ -28,7 +28,7 @@ import subprocess
 import sys
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -67,6 +67,9 @@ MAX_NAME_CHARS = 120
 PLUGIN_DIR = Path(__file__).resolve().parents[2]
 GIT_TIMEOUT_S = 5.0
 
+# The settings a client may change. The others take an edit and a restart.
+EDITABLE_SETTINGS = ("deadline_s", "queue_max_wait_s", "priority_routines")
+
 
 @dataclass(frozen=True, slots=True)
 class Settings:
@@ -78,31 +81,48 @@ class Settings:
 
     @classmethod
     def load(cls, directory: Path) -> Settings:
+        return cls.parse(cls.read(directory))
+
+    @staticmethod
+    def read(directory: Path) -> dict[str, Any]:
+        """The settings file as it is, unknown keys included. No file is no settings."""
         path = directory / "settings.json"
         if not path.is_file():
-            return cls()
+            return {}
         obj = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(obj, dict):
             raise ValueError(f"{path} is not a JSON object")
+        return obj
+
+    @classmethod
+    def parse(cls, obj: dict[str, Any]) -> Settings:
         executable = obj.get("claude_executable", "claude")
-        deadline = obj.get("deadline_s", DEFAULT_DEADLINE_S)
         if not isinstance(executable, str) or not executable:
             raise ValueError("claude_executable must be a non-empty string")
-        if isinstance(deadline, bool) or not isinstance(deadline, int | float) or deadline <= 0:
-            raise ValueError("deadline_s must be a positive number")
-        max_wait = obj.get("queue_max_wait_s", DEFAULT_QUEUE_MAX_WAIT_S)
-        if isinstance(max_wait, bool) or not isinstance(max_wait, int | float) or max_wait <= 0:
-            raise ValueError("queue_max_wait_s must be a positive number")
+        deadline = _positive(obj, "deadline_s", DEFAULT_DEADLINE_S)
+        max_wait = _positive(obj, "queue_max_wait_s", DEFAULT_QUEUE_MAX_WAIT_S)
         priority = obj.get("priority_routines", [])
         if not isinstance(priority, list) or not all(isinstance(i, str) and i for i in priority):
             raise ValueError("priority_routines must be a list of routine ids")
         return cls(
             claude_executable=executable,
-            deadline_s=float(deadline),
-            queue_max_wait_s=float(max_wait),
+            deadline_s=deadline,
+            queue_max_wait_s=max_wait,
             priority_routines=tuple(priority),
             enforce_compatibility=obj.get("enforce_compatibility", False) is True,
         )
+
+
+def _positive(obj: dict[str, Any], key: str, default: float) -> float:
+    value = obj.get(key, default)
+    # Python reads NaN and Infinity from JSON; a reply carrying one is not JSON.
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int | float)
+        or not 0 < value <= sys.float_info.max
+    ):
+        raise ValueError(f"{key} must be a positive number")
+    return float(value)
 
 
 class ApiError(Exception):
@@ -168,7 +188,8 @@ class Service(history.HistoryApi):
         self.scheduler = Scheduler(self.api_store, self.settings.deadline_s)
         db_path = self.state_dir / "omakron.db"
         worker = Worker(
-            store_factory=lambda: Store(db_path, max_wait, priority),
+            store_factory=lambda: Store(db_path),
+            before_claim=self._apply_queue_settings,
             config=WorkerConfig(
                 claude_executable=self.settings.claude_executable,
                 runs_dir=self.runs_dir,
@@ -189,6 +210,12 @@ class Service(history.HistoryApi):
             self.worker_id,
             self.settings.claude_executable,
         )
+
+    def _apply_queue_settings(self, store: Store) -> None:
+        """Give one store the current queue settings. Runs on the thread that owns the store."""
+        settings = self.settings
+        store.queue_max_wait_s = settings.queue_max_wait_s
+        store.priority_routines = list(settings.priority_routines)
 
     def _seed(self) -> None:
         assert self.api_store is not None
@@ -352,6 +379,49 @@ class Service(history.HistoryApi):
             "active_run": None if active is None else active.to_dict(),
             "routines": len(store.list_routines()),
         }
+
+    def op_service_settings(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Read, or with params replace, the settings a client may change."""
+        if params:
+            self._change_settings(params)
+        return {
+            "deadline_s": self.settings.deadline_s,
+            "queue_max_wait_s": self.settings.queue_max_wait_s,
+            "priority_routines": list(self.settings.priority_routines),
+        }
+
+    def _change_settings(self, params: dict[str, Any]) -> None:
+        """Validate, write settings.json, then apply. Nothing changes unless the write succeeds."""
+        refused = sorted(set(params) - set(EDITABLE_SETTINGS))
+        if refused:
+            raise ApiError(
+                "bad_request",
+                f"cannot change {', '.join(refused)}; only {', '.join(EDITABLE_SETTINGS)}",
+            )
+        try:
+            saved = {**Settings.read(self.config_dir), **params}
+            changed = Settings.parse(saved)
+        except ValueError as exc:
+            raise ApiError("bad_request", str(exc)) from exc
+        except OSError as exc:
+            raise ApiError("io", f"settings.json could not be read: {exc}") from exc
+        if "priority_routines" in params:
+            known = {routine.id for routine in self._store().list_routines()}
+            for routine_id in changed.priority_routines:
+                if routine_id not in known:
+                    raise ApiError(
+                        "bad_request",
+                        f"priority_routines names {routine_id!r}, which is not a routine",
+                    )
+        try:
+            manage.atomic_json(self.config_dir / "settings.json", saved)
+        except (OSError, ValueError) as exc:
+            raise ApiError("io", f"settings.json could not be written: {exc}") from exc
+        self.settings = replace(self.settings, **{key: getattr(changed, key) for key in params})
+        # The worker's store takes the new values on its own thread, before its next claim.
+        self._apply_queue_settings(self._store())
+        assert self.scheduler is not None
+        self.scheduler.deadline_s = self.settings.deadline_s
 
     def op_list_routines(self, params: dict[str, Any]) -> dict[str, Any]:
         return {"routines": [r.to_dict() for r in self._store().list_routines()]}
