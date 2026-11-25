@@ -270,6 +270,7 @@ class Worker:
             problems=list(verdict.problems),
             exit_code=supervised.exit_code,
             resolved_model=(stream.init or {}).get("model"),
+            claude_version=stream.claude_version,
             models_used=stream.resolved_models,
             result_text=stream.result_text or None,
             output_dir=str(out_dir),

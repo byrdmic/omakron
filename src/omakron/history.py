@@ -99,6 +99,7 @@ def summary(run: Run) -> dict:
             "ended_at",
             "requested_model",
             "resolved_model",
+            "claude_version",
             "retry_of",
         )
     }
@@ -186,6 +187,7 @@ def render_log(run: Run, stream: ParsedStream | None, stderr_tail: str | None) -
         ("Status", run.status),
         ("Exit code", str(run.exit_code) if run.exit_code is not None else "n/a"),
         ("Model", run.resolved_model or run.requested_model),
+        ("Claude Code", run.claude_version or "n/a"),
         ("Working folder", snapshot.get("cwd", "")),
         ("Tools", snapshot.get("tools", "default")),
         ("Permission mode", snapshot.get("permission_mode", "")),

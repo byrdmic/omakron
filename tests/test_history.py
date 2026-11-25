@@ -9,6 +9,8 @@ import pytest
 from omakron.client import ServiceError
 from omakron.history import failure
 from omakron.store import Store
+from tests.fake_claude import CLAUDE_VERSION
+from tests.service_harness import wait_until
 from tests.test_editor import draft
 
 
@@ -149,17 +151,23 @@ def test_every_run_leaves_a_readable_log_in_the_chosen_folder(service, tmp_path)
     assert done["status"] == "succeeded", done["problems"]
     folder = logs / run["id"]
     assert done["output_dir"] == str(folder)
+    # log.md is written after the terminal status, so a fast client can be early.
+    assert wait_until((folder / "log.md").is_file)
     text = (folder / "log.md").read_text(encoding="utf-8")
     assert text.startswith("# Folder summary\n")
     assert "- Status: succeeded" in text and "## Prompt" in text and "## Result" in text
     assert done["result_text"] in text
+    assert f"- Claude Code: {CLAUDE_VERSION}" in text
     detail = service.request("get_run", {"run_id": run["id"]})["run"]
     assert detail["folder"] == str(folder) and detail["log"] == text
     assert detail["duration_s"] is not None and detail["name"] == "Folder summary"
     # Failed runs are logged too, and the failure names its cause.
     service.set_mode("error")
     failed = service.wait_run(service.run_now()["run"]["id"])
+    assert failed["claude_version"] == CLAUDE_VERSION
+    assert wait_until((logs / failed["id"] / "log.md").is_file)
     failed_text = (logs / failed["id"] / "log.md").read_text(encoding="utf-8")
+    assert f"- Claude Code: {CLAUDE_VERSION}" in failed_text
     assert "- Status: failed" in failed_text and "## Problems" in failed_text
     # Retention never touches result.md or log.md, wherever the folder is.
     service.request("output_settings", {"retention_days": 1})

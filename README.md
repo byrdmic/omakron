@@ -72,6 +72,11 @@ PYTHONPATH=src python -m omakron.client cancel <run-id>
 PYTHONPATH=src python -m omakron.client delete-routine <routine-id>
 ```
 
+`status` names the code the service started from: `version`, the git `commit`
+of the plugin folder, and `modified`, whether tracked files differed from that
+commit. Both git values are null when git cannot answer, or when the folder is
+not the top level of its own repository.
+
 On first start the service seeds one routine, "Folder summary", manual only
 and paused. It asks the model to describe its working folder and write
 `SUMMARY.md` there. Runs belong to the service: the client may exit at once,

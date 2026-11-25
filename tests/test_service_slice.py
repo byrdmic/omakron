@@ -21,6 +21,7 @@ from omakron import seed
 from omakron.client import ServiceError
 from omakron.runner import BASE_FLAGS, DEFAULT_MODEL, ENV_PASSTHROUGH
 
+from .fake_claude import CLAUDE_VERSION
 from .service_harness import ServiceHarness, process_alive, tree_digest, wait_until
 
 pytestmark = pytest.mark.slow
@@ -118,6 +119,8 @@ def test_u05_run_now_yields_one_saved_result_outliving_the_client_and_a_restart(
     assert done["routine_snapshot"]["tools"] == "default"
     assert done["result_text"].startswith("The working folder is empty"), "kept as the model said"
     assert done["resolved_model"] == DEFAULT_MODEL
+    assert done["claude_version"] == CLAUDE_VERSION
+    assert service.request("list_runs")["runs"][0]["claude_version"] == CLAUDE_VERSION
     assert done["models_used"] == [DEFAULT_MODEL]
     assert done["exit_code"] == 0
     assert done["started_at"] and done["ended_at"] and done["claimed_at"]
