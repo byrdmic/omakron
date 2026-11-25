@@ -1,5 +1,6 @@
 """Install transactions preserve other plugins and recover exact prior code/data."""
 
+import gc
 import json
 import shutil
 import sqlite3
@@ -115,6 +116,22 @@ def test_rollback_restores_code_and_data_and_keeps_new_unrelated_settings(instal
                 == "false"
             )
     finally:
+        manager.close()
+
+
+def test_backup_closes_the_database_before_copying_it(installation):
+    seed_installed(installation)
+    manager = Manager(installation, command=lambda args: "")
+    # Only an explicit close counts: the collector may not run until the copy is under way.
+    gc.disable()
+    try:
+        backup = manager.backup()
+        assert sorted(path.name for path in (backup / "state").glob("omakron.db*")) == [
+            "omakron.db"
+        ]
+        assert not installation.database.with_name("omakron.db-wal").exists()
+    finally:
+        gc.enable()
         manager.close()
 
 
