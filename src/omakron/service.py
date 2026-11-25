@@ -21,8 +21,10 @@ import json
 import logging
 import os
 import secrets
+import shutil
 import signal
 import socket
+import subprocess
 import sys
 import threading
 import time
@@ -62,6 +64,8 @@ DEFAULT_DEADLINE_S = 600.0  # accepted 2026-09-11: ten minutes per run
 MAX_IDEMPOTENCY_KEY_CHARS = 128
 MAX_PROMPT_CHARS = 20_000
 MAX_NAME_CHARS = 120
+PLUGIN_DIR = Path(__file__).resolve().parents[2]
+GIT_TIMEOUT_S = 5.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,6 +126,8 @@ class Service(history.HistoryApi):
         self.workdir = self.state_dir / "workdir"
         self.worker_id = f"{socket.gethostname()}-{os.getpid()}-{secrets.token_hex(4)}"
         self.started_at = utc_now()
+        self.commit: str | None = None
+        self.modified: bool | None = None
         self.stopping = threading.Event()
         self.wake = threading.Event()
         self.settings = Settings()
@@ -135,6 +141,8 @@ class Service(history.HistoryApi):
     # ------------------------------------------------------------- lifecycle
 
     def start(self) -> None:
+        # Read once: the files can change under a running service.
+        self.commit, self.modified = running_code(PLUGIN_DIR)
         self.settings = Settings.load(self.config_dir)
         if self.settings.enforce_compatibility:
             manage.compatibility()
@@ -327,6 +335,8 @@ class Service(history.HistoryApi):
         return {
             "service": {
                 "version": __version__,
+                "commit": self.commit,
+                "modified": self.modified,
                 "worker": self.worker_id,
                 "pid": os.getpid(),
                 "started_at": self.started_at,
@@ -529,6 +539,39 @@ class Service(history.HistoryApi):
             raise ApiError("conflict", str(exc)) from exc
         self.wake.set()
         return {"run": run.to_dict()}
+
+
+def running_code(folder: Path) -> tuple[str | None, bool | None]:
+    """The git commit of ``folder`` and whether its tracked files differ from that commit.
+
+    Both are None when git cannot say, or when ``folder`` is not itself the
+    top level of a repository.
+    """
+    executable = shutil.which("git")
+    if executable is None:
+        return None, None
+    # A GIT_DIR from the environment would answer for some other repository.
+    env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+
+    def git(*args: str) -> str:
+        output = subprocess.run(
+            [executable, "--no-optional-locks", "-C", str(folder), *args],
+            check=True,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            timeout=GIT_TIMEOUT_S,
+            env=env,
+        ).stdout
+        return os.fsdecode(output)
+
+    try:
+        top, commit = git("rev-parse", "--show-toplevel", "HEAD").splitlines()
+        if Path(top) != folder.resolve():
+            return None, None
+        changes = git("status", "--porcelain", "--untracked-files=no")
+    except OSError, ValueError, subprocess.SubprocessError:
+        return None, None
+    return commit, bool(changes)
 
 
 def local_timezone(env: dict[str, str] | None = None) -> str:
