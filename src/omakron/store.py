@@ -24,7 +24,7 @@ from typing import Any
 
 from omakron.schedule import Schedule, ScheduleError
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 MAX_RESULT_TEXT_CHARS = 64 * 1024  # the run row keeps this much; stdout.jsonl keeps it all
 
 # Non-terminal statuses. Terminal ones are the runner's ``Outcome`` values.
@@ -82,6 +82,7 @@ CREATE TABLE IF NOT EXISTS runs (
     proc_start       TEXT,
     requested_model  TEXT NOT NULL,
     resolved_model   TEXT,
+    claude_version   TEXT,
     models_used      TEXT,
     exit_code        INTEGER,
     result_text      TEXT,
@@ -231,6 +232,7 @@ class Run:
     proc_start: str | None
     requested_model: str
     resolved_model: str | None
+    claude_version: str | None
     models_used: list[str]
     exit_code: int | None
     result_text: str | None
@@ -264,6 +266,7 @@ class Run:
             "worker": self.worker,
             "requested_model": self.requested_model,
             "resolved_model": self.resolved_model,
+            "claude_version": self.claude_version,
             "models_used": self.models_used,
             "exit_code": self.exit_code,
             "result_text": self.result_text,
@@ -326,6 +329,7 @@ def _run(row: sqlite3.Row) -> Run:
         proc_start=row["proc_start"],
         requested_model=row["requested_model"],
         resolved_model=row["resolved_model"],
+        claude_version=row["claude_version"],
         models_used=_json_or(row["models_used"], []),
         exit_code=row["exit_code"],
         result_text=row["result_text"],
@@ -373,12 +377,12 @@ class Store:
                 "SELECT value FROM schema_meta WHERE key = 'schema_version'"
             ).fetchone()
             version = int(row["value"]) if row else None
-            if version not in (1, 2, 3, SCHEMA_VERSION):
+            if version not in (1, 2, 3, 4, SCHEMA_VERSION):
                 self.conn.close()
                 raise StoreError(
                     f"database schema version {version} is not {SCHEMA_VERSION}; refusing to open"
                 )
-        if version in (1, 2, 3):
+        if version in (1, 2, 3, 4):
             backup_path = self.path.with_name(
                 self.path.name + f".v{version}-" + uuid.uuid4().hex + ".backup"
             )
@@ -413,10 +417,13 @@ class Store:
                 ]
             # Version 4: a routine may point at a skill folder whose SKILL.md is
             # read at every launch; the prompt column keeps the text last seen.
+            if version in (1, 2, 3):
+                steps.append("ALTER TABLE routines ADD COLUMN source TEXT;")
+            # Version 5: a run keeps the Claude Code version that executed it.
             steps += [
-                "ALTER TABLE routines ADD COLUMN source TEXT;",
+                "ALTER TABLE runs ADD COLUMN claude_version TEXT;",
                 SCHEMA,
-                "UPDATE schema_meta SET value='4' WHERE key='schema_version';",
+                "UPDATE schema_meta SET value='5' WHERE key='schema_version';",
                 "COMMIT;",
             ]
             self.conn.executescript("".join(steps))
@@ -780,6 +787,7 @@ class Store:
         problems: list[str],
         exit_code: int | None = None,
         resolved_model: str | None = None,
+        claude_version: str | None = None,
         models_used: list[str] | None = None,
         result_text: str | None = None,
         output_dir: str | None = None,
@@ -794,7 +802,7 @@ class Store:
         with self._tx():
             cur = self.conn.execute(
                 "UPDATE runs SET status = ?, problems = ?, ended_at = ?, exit_code = ?,"
-                " resolved_model = ?, models_used = ?, result_text = ?,"
+                " resolved_model = ?, claude_version = ?, models_used = ?, result_text = ?,"
                 " output_dir = COALESCE(?, output_dir), output_sha256 = ?, stderr_tail = ?"
                 " WHERE id = ? AND status IN ('queued', 'claimed', 'running')",
                 (
@@ -803,6 +811,7 @@ class Store:
                     utc_now(),
                     exit_code,
                     resolved_model,
+                    claude_version,
                     json.dumps(models_used or []),
                     result_text,
                     output_dir,

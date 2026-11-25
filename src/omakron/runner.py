@@ -154,6 +154,11 @@ class ParsedStream:
         return value if isinstance(value, str) else ""
 
     @property
+    def claude_version(self) -> str | None:
+        value = (self.init or {}).get("claude_code_version")
+        return value if isinstance(value, str) else None
+
+    @property
     def resolved_models(self) -> list[str]:
         usage = (self.result or {}).get("modelUsage") or {}
         return sorted(usage) if isinstance(usage, dict) else []

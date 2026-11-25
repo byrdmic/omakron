@@ -31,6 +31,7 @@ import sys
 import time
 from pathlib import Path
 
+CLAUDE_VERSION = "9.8.7"
 OK_TEXT = "The working folder is empty, so there is nothing to summarize yet."
 
 
@@ -66,7 +67,16 @@ def main() -> int:
     model = "fake-model"
     if "--model" in sys.argv:
         model = sys.argv[sys.argv.index("--model") + 1]
-    emit({"type": "system", "subtype": "init", "model": model, "tools": [], "mcp_servers": []})
+    emit(
+        {
+            "type": "system",
+            "subtype": "init",
+            "model": model,
+            "claude_code_version": CLAUDE_VERSION,
+            "tools": [],
+            "mcp_servers": [],
+        }
+    )
 
     if mode == "hang":
         while True:

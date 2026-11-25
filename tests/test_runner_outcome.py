@@ -8,6 +8,7 @@ from omakron.runner import (
     BASE_FLAGS,
     DEFAULT_MODEL,
     Outcome,
+    ParsedStream,
     child_env,
     classify,
     claude_argv,
@@ -15,6 +16,7 @@ from omakron.runner import (
 )
 
 from .conftest import FAKE_CLAUDE
+from .fake_claude import CLAUDE_VERSION
 
 
 def argv_for_fake() -> list[str]:
@@ -55,6 +57,14 @@ def test_ok_run_succeeds_and_keeps_the_result_text(fake_claude):
     assert verdict.outcome is Outcome.SUCCEEDED and verdict.problems == ()
     assert stream.result_text.startswith("The working folder is empty")
     assert stream.resolved_models == [DEFAULT_MODEL]
+    assert stream.claude_version == CLAUDE_VERSION
+
+
+@pytest.mark.parametrize(
+    "init", [None, {}, {"claude_code_version": None}, {"claude_code_version": {"major": 2}}]
+)
+def test_claude_version_is_none_unless_the_init_event_names_one(init):
+    assert ParsedStream(init=init).claude_version is None
 
 
 def test_error_result_is_a_failure_naming_the_message(fake_claude):
